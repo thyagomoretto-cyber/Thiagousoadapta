@@ -1,0 +1,1605 @@
+"""OpenClaw as a society agent runtime (``docs/agent-runtimes.md``).
+
+OpenClaw's documented embedding path is a supervised Gateway child plus its
+own clients; Jarvis follows it exactly. Each agent gets its own state folder
+and its own loopback Gateway (started when the agent's chat is opened or on
+its first turn, stopped after :data:`IDLE_STOP_S` without one), and turns run
+on the version-matched ``openclaw acp`` bridge against it, which stays warm
+between turns (``warm.py``). No Gateway WebSocket client is written here:
+that wire protocol requires an exact version match, the bridge that ships
+with the install always has it.
+
+Jarvis installs its own copy, at the tested release, into
+``<tools_root>/openclaw-cli`` with a private Node.js: no administrator
+rights, no system Node, no PATH change, and the person's own OpenClaw is
+never updated by Jarvis. A ready OpenClaw the person installed themselves is
+used until Jarvis' copy exists.
+
+The config Jarvis writes uses only long-stable keys. The model key and the
+Jarvis control key reach OpenClaw as ``${ENV}`` references the Gateway
+substitutes from its own environment, so neither is written to disk. A config
+the installed version rejects (Gateway exit code 78) gets one
+``openclaw doctor --fix`` pass, as the embedding guide prescribes.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import hashlib
+import json
+import logging
+import os
+import re
+import secrets
+import socket
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Final
+
+from dodaios.agent_chat.effort import ORDER, snap_to_ladder
+from dodaios.agent_runtimes import base, openclaw_gate, versions
+from dodaios.agent_runtimes.base import (
+    DetectCache,
+    HomeFileLock,
+    RuntimeLaunch,
+    RuntimeStatus,
+    RuntimeTurn,
+    RuntimeUnavailable,
+    TurnSlots,
+    agent_home,
+    child_env,
+    format_version,
+    home_key,
+    is_windows,
+    parse_version,
+    posix_installer,
+    ps_quote,
+    run_version,
+    safe_key,
+    which,
+    windows_installer,
+    write_if_changed,
+    write_json_if_changed,
+)
+from dodaios.agent_runtimes.model_map import KEY_ENV_VAR, RUNTIME_PROVIDER_NAME
+
+log = logging.getLogger(__name__)
+
+NAME: Final[str] = "openclaw"
+LABEL: Final[str] = "OpenClaw"
+
+#: The one conversation of an agent inside its own state folder.
+SESSION_KEY: Final[str] = "agent:main:main"
+
+#: Stop an agent's Gateway after this long without a turn (with its warm
+#: bridge: ``warm.IDLE_STOP_S`` is the same).
+IDLE_STOP_S: Final[float] = 30 * 60
+
+#: How long a Gateway may take to listen (16-46 s measured on Windows).
+_START_TIMEOUT_S: Final[float] = 120.0
+
+#: Gateways kept running at once (about 1.3 GB of memory each); the least
+#: recently used idle one stops for a new one.
+_MAX_GATEWAYS: Final[int] = 3
+
+#: The Gateway session a warm-up run uses, never an agent's conversation.
+_WARMUP_SESSION_KEY: Final[str] = "agent:main:dodaios-warmup"
+
+#: A warm-up only runs when the agent's turn slot is free at once.
+_WARM_SLOT_WAIT_S: Final[float] = 0.5
+
+#: How long ``openclaw doctor --fix`` may run before it is stopped.
+_DOCTOR_TIMEOUT_S: Final[float] = 120.0
+
+#: How long the migration pass (``openclaw doctor --fix`` after an update) may
+#: run: it rewrites the agent's database, which takes longer than a config fix.
+_MIGRATE_TIMEOUT_S: Final[float] = 300.0
+
+#: ``EX_CONFIG``: the Gateway refused its configuration.
+_EXIT_CONFIG: Final[int] = 78
+
+#: How long a started Gateway may take to finish its agent database admission
+#: after ``/healthz`` already answers (13-45 s measured on Windows, 2026.10.8).
+_ADMISSION_WAIT_S: Final[float] = 120.0
+
+#: What the Gateway logs about its agent database admission (2026.10+). A
+#: release that logs none of these is ready once ``/healthz`` answers.
+_ADMISSION_PENDING: Final[tuple[str, ...]] = (
+    "has not completed startup inspection and preparation",
+)
+_ADMISSION_RECOVERED: Final[tuple[str, ...]] = (
+    "agent database recovered after background inspection",
+)
+#: The database was written by an older release and needs ``doctor --fix``.
+_ADMISSION_DEGRADED: Final[re.Pattern[str]] = re.compile(
+    r"agent database remains degraded|agent database \S.{0,400}?uses schema version \d+",
+    re.IGNORECASE,
+)
+_DEGRADED_REASON: Final[re.Pattern[str]] = re.compile(r'reason="([^"]+)"')
+
+#: The release the agent's state folder last ran under (``--version`` line).
+_BUILD_MARKER: Final[str] = "runtime-build.txt"
+
+#: Node.js for Jarvis' private copy (the release OpenClaw's own user-space
+#: installer pins; inside the engine range below). OpenClaw's live
+#: ``install.ps1`` refuses a private Node older than 24.22.1 / 26.12.1 since
+#: 2026-10-27 (node:sqlite NUL truncation, nodejs/node#61954), so a lower
+#: ``-NodeVersion`` fails every Windows install, pinned release or not.
+_PRIVATE_NODE_VERSION: Final[str] = "24.22.1"
+
+#: The embedding preset from OpenClaw's embedding guide.
+_EMBED_ENV: Final[dict[str, str]] = {
+    "OPENCLAW_DISABLE_BONJOUR": "1",
+    "OPENCLAW_NO_RESPAWN": "1",
+    "OPENCLAW_SKIP_CHANNELS": "1",
+    "OPENCLAW_EXEC_SHELL_SNAPSHOT": "0",
+}
+
+#: Native tools that duplicate a Jarvis feature (routines, messaging, other
+#: devices, the visible browser, desktop control, asking the person) and
+#: would bypass Jarvis' own approvals and budgets, and tools for OpenClaw's
+#: own apps and dashboards no Dodaios agent has (their schemas were about a
+#: quarter of every request). ``computer`` drives this desktop and
+#: ``terminal`` the operator's shared terminals; ``openclaw`` changes
+#: OpenClaw's own setup and ``ask_user`` asks in OpenClaw's own UI, both
+#: waiting for an approval or answer no Dodaios surface can give.
+_ALWAYS_DENIED: Final[tuple[str, ...]] = (
+    "automations",
+    "message",
+    "conversations_send",
+    "conversations_turn",
+    "gateway",
+    "nodes",
+    "computer",
+    "terminal",
+    "openclaw",
+    "ask_user",
+    "browser",
+    "skill_workshop",
+    "theme",
+    "dashboard",
+    "mobile_ui",
+    "progress_card",
+    "presence",
+    "portal",
+    "tts",
+    "github_identity_status",
+    "plugins",
+    "node_inference",
+)
+
+#: Bundled plugins no Jarvis agent loads: a headless browser, desktop control
+#: (cua-computer), device pairing and file transfer to other devices,
+#: location, voice, and an own GitHub login. The provider adapters stay;
+#: Jarvis' model gateway speaks their wire formats. Each one also costs
+#: Gateway start-up time (15 s for the plugin load, measured 2026-10-07).
+_DENIED_PLUGINS: Final[tuple[str, ...]] = (
+    "browser",
+    "canvas",
+    "cua-computer",
+    "device-pair",
+    "file-transfer",
+    "geolocation",
+    "github",
+    "linux-node",
+    "talk-voice",
+)
+
+_CONTROL_KEY_ENV: Final[str] = "JARVIS_CONTROL_API_KEY"
+
+#: ``agents.defaults.thinkingDefault`` levels OpenClaw accepts ("none" -> "off").
+_THINKING_LEVELS: Final[frozenset[str]] = frozenset(
+    {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
+#: The levels OpenClaw (2026.9) offers a model of a provider it has no
+#: policy for, as Dodaios' ``jarvis`` provider is: ``off`` .. ``high`` when the
+#: model is declared to reason, plus each of ``xhigh`` / ``max`` the model's
+#: ``compat.supportedReasoningEfforts`` names; ``off`` alone otherwise. A
+#: per-prompt level outside that set fails the turn ("Thinking level ... is not
+#: supported"), so :func:`prompt_meta` never sends one.
+_BASE_THINKING: Final[tuple[str, ...]] = ("none", "minimal", "low", "medium", "high")
+_DECLARED_EFFORTS: Final[tuple[str, ...]] = ("minimal", "low", "medium", "high", "xhigh", "max")
+#: What OpenClaw posts as the assistant's reply when a turn fails before any
+#: model call (no tokens, no answer): shown as the turn's error, not as an
+#: answer. The first group is the reason.
+FAILURE_REPLIES: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"^\[OpenClaw interruption\]\s*(.+)$", re.DOTALL),
+    re.compile(r"^(Thinking level \"[^\"]*\" is not supported for \S+\. Use one of: .*)$"),
+)
+
+#: What a turn that failed inside the Gateway reads as. OpenClaw's ACP bridge
+#: ends an errored run like a finished one (``stopReason: end_turn``, no
+#: text), so the reason is only in the Gateway's log.
+CONTEXT_FULL_REASON: Final[str] = (
+    "The conversation no longer fits this model's context window (context window "
+    "exceeded). Start a fresh chat, or pick a model with a larger context window."
+)
+_RUN_FAILED: Final[re.Pattern[str]] = re.compile(r"\bisError=true\b.*?\brawError=(.+)$")
+_OVERFLOW_GIVEN_UP: Final[tuple[str, ...]] = (
+    "exhausted provider overflow recovery",
+    "kind=context_overflow",
+)
+_OVERFLOW_WORDS: Final[tuple[str, ...]] = (
+    "context window exceeded",
+    "context overflow",
+    "context length exceeded",
+    "prompt too large",
+)
+#: How much of the end of the Gateway's log a failed turn reads.
+_PROBE_TAIL_BYTES: Final[int] = 512 * 1024
+_SECRET_SHAPES: Final[re.Pattern[str]] = re.compile(
+    r"(sk-[A-Za-z0-9_\-]{6,}|AIza[0-9A-Za-z_\-]{10,}|[Bb]earer\s+[A-Za-z0-9._\-]{10,}"
+    r"|eyJ[A-Za-z0-9._\-]{20,})"
+)
+
+_INSTALL_URL_PS1: Final[str] = "https://openclaw.ai/install.ps1"
+_INSTALL_URL_SH: Final[str] = "https://openclaw.ai/install.sh"
+#: OpenClaw's user-space installer: a private Node.js under ``--prefix``, no sudo.
+_INSTALL_CLI_URL_SH: Final[str] = "https://openclaw.ai/install-cli.sh"
+
+
+def run_failure(log_path: Path, since: float) -> str:
+    """Why the Gateway's run for a turn started at ``since`` failed ("" = no failure logged).
+
+    Reads the end of the Gateway's log: only lines stamped at or after the
+    turn's start count. A context overflow the Gateway could not compact away
+    reads as :data:`CONTEXT_FULL_REASON`; any other failed run as its own
+    short reason, bounded and with key-shaped text masked.
+    """
+    import datetime as _dt
+
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - _PROBE_TAIL_BYTES))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:  # no readable Gateway log: the caller keeps its generic reason
+        return ""
+    overflow = False
+    failed = ""
+    for line in text.splitlines():
+        stamp, _, rest = line.partition(" ")
+        try:
+            at = _dt.datetime.fromisoformat(stamp).timestamp()
+        except ValueError:  # continuation line without a timestamp: not a turn event
+            continue
+        if at < since - 1.0:
+            continue
+        lowered = rest.lower()
+        if any(marker in rest for marker in _OVERFLOW_GIVEN_UP):
+            overflow = True
+            continue
+        match = _RUN_FAILED.search(rest)
+        if match:
+            raw = match.group(1).strip()
+            if any(word in lowered for word in _OVERFLOW_WORDS):
+                overflow = True
+            failed = raw
+    if overflow:
+        return CONTEXT_FULL_REASON
+    if not failed:
+        return ""
+    reason = _SECRET_SHAPES.sub("[redacted]", " ".join(failed.split()))
+    if len(reason) > 240:
+        reason = reason[:240].rstrip() + "…"
+    return f"OpenClaw ended the run with an error: {reason}"
+
+
+# ------------------------------------------------------------------ install
+
+
+def cli_prefix() -> Path:
+    """Where Jarvis keeps its own OpenClaw and the Node.js it runs on."""
+    return base.tools_root() / "openclaw-cli"
+
+
+def _private_launcher() -> list[str] | None:
+    prefix = cli_prefix()
+    if is_windows():
+        node = prefix / "node" / "node.exe"
+        entry = prefix / "pkg" / "node_modules" / "openclaw" / "openclaw.mjs"
+        return [str(node), str(entry)] if node.is_file() and entry.is_file() else None
+    wrapper = prefix / "bin" / "openclaw"
+    return [str(wrapper)] if wrapper.is_file() and os.access(wrapper, os.X_OK) else None
+
+
+def _installer_node_dirs() -> tuple[Path, ...]:
+    """Private Node.js folders OpenClaw's own installers create (never on PATH here)."""
+    dirs = [Path.home() / ".openclaw" / "tools" / "node" / "bin"]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        dirs.append(Path(local) / "OpenClaw" / "deps" / "portable-node")
+    return tuple(dirs)
+
+
+def _installer_bin_dirs() -> tuple[Path, ...]:
+    """Folders OpenClaw's installers put the command into besides npm's own."""
+    home = Path.home()
+    return (home / ".openclaw" / "bin", home / ".npm-global" / "bin")
+
+
+def _node() -> str | None:
+    # The installers' private Node first: it exists because the system one
+    # was missing or unsuitable.
+    for directory in _installer_node_dirs():
+        for name in ("node.exe", "node") if is_windows() else ("node",):
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+    return which("node", "node.exe")
+
+
+def _launcher() -> list[str] | None:
+    """How to start OpenClaw: Jarvis' own copy, else the person's install.
+
+    On Windows the npm shim is a ``.cmd`` file; running ``node openclaw.mjs``
+    directly keeps cmd.exe (and its argument quoting) out of the way. The
+    package's own launcher still picks OpenClaw's private Node runtime when
+    the system Node is too old.
+    """
+    private = _private_launcher()
+    if private is not None:
+        return private
+    shim = which("openclaw", "openclaw.cmd", "openclaw.exe", extra_dirs=_installer_bin_dirs())
+    if not shim:
+        return None
+    path = Path(shim)
+    if is_windows() and path.suffix.lower() in {".cmd", ".bat", ".ps1", ""}:
+        node = _node()
+        # A global install keeps the package beside the shim; a project
+        # install keeps the shim in node_modules/.bin.
+        for entry in (
+            path.parent / "node_modules" / "openclaw" / "openclaw.mjs",
+            path.parent.parent / "openclaw" / "openclaw.mjs",
+        ):
+            if entry.is_file() and node:
+                return [node, str(entry)]
+    return [shim]
+
+
+def _node_supported(version: tuple[int, int, int] | None) -> bool:
+    """OpenClaw's engine range: Node >=24.16 <25, or >=26.1."""
+    if version is None:
+        return False
+    return (24, 16, 0) <= version < (25, 0, 0) or version >= (26, 1, 0)
+
+
+def _private_node_present() -> bool:
+    base_dir = os.environ.get("OPENCLAW_HOME")
+    root = Path(base_dir) if base_dir else Path.home() / ".openclaw"
+    if (root / "tools" / "cli-node").is_dir():
+        return True
+    return any(directory.is_dir() for directory in _installer_node_dirs())
+
+
+def _install_hint() -> str:
+    if is_windows():
+        return f"& ([scriptblock]::Create((iwr -useb {_INSTALL_URL_PS1}))) -NoOnboard"
+    return f"curl -fsSL {_INSTALL_URL_SH} | bash -s -- --no-onboard"
+
+
+# ------------------------------------------------------------------ gateway
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+async def _healthy(port: int) -> bool:
+    """Whether OpenClaw's Gateway answers its unauthenticated ``/healthz`` probe.
+
+    A bare TCP accept is not enough: another program may have taken the port
+    between choosing it and the Gateway binding it.
+    """
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection("127.0.0.1", port), timeout=2
+        )
+    except (OSError, TimeoutError):  # not listening yet: the caller polls again
+        return False
+    try:
+        writer.write(
+            f"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n".encode()
+        )
+        await writer.drain()
+        status = await asyncio.wait_for(reader.readline(), timeout=3)
+    except (OSError, TimeoutError):  # still starting: the caller polls again
+        return False
+    finally:
+        writer.close()
+        with contextlib.suppress(OSError):
+            await writer.wait_closed()
+    parts = status.decode("latin-1", errors="replace").split()
+    return len(parts) >= 2 and parts[1] == "200"
+
+
+@dataclass(slots=True)
+class _Gateway:
+    #: ``home_key``: the agent's chat Gateway, or its routine-runs Gateway.
+    key: str
+    home: Path
+    port: int
+    env_hash: str
+    proc: asyncio.subprocess.Process
+    tree: Any
+    log_handle: Any
+    lock: HomeFileLock
+    tracker: Any
+    last_used: float = field(default_factory=time.monotonic)
+    in_use: int = 0
+    poisoned: bool = False
+    #: Its first agent run (seconds of lazy set-up) is done.
+    warmed_up: bool = False
+
+    def alive(self) -> bool:
+        return self.proc.returncode is None
+
+
+def _pid_file(home: Path) -> Path:
+    return home / "gateway.pid"
+
+
+def _write_pid_file(home: Path, pid: int, port: int) -> None:
+    import psutil
+
+    try:
+        created = psutil.Process(pid).create_time()
+    except psutil.Error:  # gone already: nothing to sweep later
+        return
+    write_json_if_changed(_pid_file(home), {"pid": pid, "port": port, "created": created})
+
+
+def _reap_stale_gateway(home: Path) -> bool:
+    """Stop a Gateway an earlier app process left running (crash, force-quit).
+
+    Only the process recorded in this folder's ``gateway.pid`` — same pid,
+    same creation time, a ``gateway run`` command line — and its descendants.
+    Called with the folder's Gateway lock held, so its owner is gone.
+    """
+    path = _pid_file(home)
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):  # no record: nothing was left behind
+        return False
+    import psutil
+
+    killed = False
+    try:
+        proc = psutil.Process(int(record["pid"]))
+        cmdline = " ".join(proc.cmdline())
+        same = abs(proc.create_time() - float(record["created"])) <= 1.0
+        if same and "gateway" in cmdline and "run" in cmdline:
+            for child in proc.children(recursive=True):
+                with contextlib.suppress(psutil.Error):
+                    child.kill()
+            proc.kill()
+            killed = True
+            log.info("agent runtimes: stopped an OpenClaw gateway left by an earlier run")
+    except (psutil.Error, KeyError, TypeError, ValueError) as exc:
+        log.debug("agent runtimes: stale gateway record ignored: %s", exc)
+    with contextlib.suppress(OSError):
+        path.unlink()
+    return killed
+
+
+class OpenClawRuntime:
+    name = NAME
+    label = LABEL
+
+    def __init__(self) -> None:
+        from dodaios.agent_runtimes.warm import WarmPool
+
+        self._detect = DetectCache()
+        self._warm = WarmPool(NAME)
+        self._gateways: dict[str, _Gateway] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._slots = TurnSlots(NAME, lock_dir=lambda: base.runtimes_root() / "locks")
+        self._reaper: asyncio.Task[None] | None = None
+
+    @property
+    def gate(self) -> Any:
+        return self._slots.gate
+
+    # ----------------------------------------------------------- detection
+
+    def detect(self, *, refresh: bool = False, fast: bool = False) -> RuntimeStatus:
+        """Installed, version, ready. ``fast`` (a turn): an expired *ready*
+        answer is used and checked again in the background."""
+        if refresh:
+            self._detect.clear()
+        cached = self._detect.get()
+        if cached is not None:
+            return cached
+        if fast:
+            stale = self._detect.stale_ready(lambda: self.detect(refresh=True))
+            if stale is not None:
+                return stale
+        pin = versions.pin(NAME)
+        minimum = format_version(pin.minimum)
+        launcher = _launcher()
+        if launcher is None:
+            return self._detect.put(
+                RuntimeStatus(
+                    NAME,
+                    LABEL,
+                    installed=False,
+                    minimum_version=minimum,
+                    problem="OpenClaw is not installed.",
+                    problem_kind="not_installed",
+                    install_hint=_install_hint(),
+                )
+            )
+        output = run_version([*launcher, "--version"])
+        version = parse_version(output)
+        problem = ""
+        kind = ""
+        if version is None:
+            problem = "OpenClaw is installed but did not report its version."
+            kind = "no_version"
+        elif version < pin.minimum:
+            problem = f"OpenClaw {minimum} or newer is needed. Update it."
+            kind = "outdated"
+        elif _private_launcher() is None:
+            # The person's own install runs on whatever Node.js they have;
+            # Jarvis' copy brings its own.
+            node = _node()
+            node_version = parse_version(run_version([node, "--version"])) if node else None
+            if not _node_supported(node_version) and not _private_node_present():
+                problem = (
+                    "OpenClaw needs Node.js 24.16+ or 26.1+. Dodaios installs its own "
+                    "copy of OpenClaw with a suitable Node.js."
+                )
+                kind = "node"
+        ready = not problem
+        return self._detect.put(
+            RuntimeStatus(
+                NAME,
+                LABEL,
+                installed=True,
+                version=format_version(version) if version else "",
+                minimum_version=minimum,
+                ready=ready,
+                problem=problem,
+                problem_kind=kind,
+                install_hint=_install_hint(),
+                untested=bool(
+                    ready and version and pin.tested is not None and version > pin.tested
+                ),
+                build=output.splitlines()[0].strip() if output else "",
+            )
+        )
+
+    def install_command(self, revision: str | None = None) -> list[str] | None:
+        """Install Jarvis' own copy at the tested release (or ``revision``).
+
+        Windows: OpenClaw's installer provides only the private, checksum-
+        verified Node.js (``-NodeOnly``; its full mode would try ``winget``
+        first, a machine-wide install behind a UAC prompt), then that Node's
+        npm installs the package into Jarvis' folder. macOS/Linux: OpenClaw's
+        user-space installer does both under ``--prefix`` without sudo.
+        """
+        version = revision or versions.pin(NAME).tested_text or "latest"
+        prefix = cli_prefix()
+        if is_windows():
+            node_dir = prefix / "node"
+            npm_cli = node_dir / "node_modules" / "npm" / "bin" / "npm-cli.js"
+            body = (
+                f"& ([scriptblock]::Create((Invoke-RestMethod {_INSTALL_URL_PS1}))) "
+                f"-NodeOnly -NodePrefix {ps_quote(str(node_dir))} "
+                f"-NodeVersion {ps_quote(_PRIVATE_NODE_VERSION)}; "
+                # npm runs package scripts through ``cmd /c node ...``: without
+                # this, ``node`` is the system's (CI: 22, rejected by OpenClaw's
+                # preinstall) or missing. This install process only, never PATH.
+                f"$env:Path = {ps_quote(str(node_dir) + ';')} + $env:Path; "
+                f"& {ps_quote(str(node_dir / 'node.exe'))} {ps_quote(str(npm_cli))} "
+                f"install -g --prefix {ps_quote(str(prefix / 'pkg'))} "
+                f"{ps_quote('openclaw@' + version)} --no-fund --no-audit --loglevel=error; "
+                "exit $LASTEXITCODE"
+            )
+            return windows_installer(body)
+        return posix_installer(
+            _INSTALL_CLI_URL_SH,
+            ["--prefix", str(prefix), "--version", version, "--no-onboard"],
+            requires=("git",),
+        )
+
+    def update_command(self) -> list[str] | None:
+        """Update = install Jarvis' copy at the tested release; never ``openclaw update``,
+        which goes to upstream latest and would update the person's own install."""
+        return self.install_command()
+
+    def revision(self, status: RuntimeStatus) -> str:
+        """What a rollback reinstalls: the release itself."""
+        return status.version
+
+    # -------------------------------------------------------------- config
+
+    def config_for(self, turn: RuntimeTurn, *, port: int, token: str) -> dict[str, Any]:
+        route = turn.route
+        home = base.runtimes_root() / NAME / safe_key(home_key(turn.agent_id, turn.session_id))
+        provider: dict[str, Any] = {
+            "baseUrl": route.base_url,
+            # A keyless local server still needs a non-empty value.
+            "apiKey": f"${{{KEY_ENV_VAR}}}" if route.api_key else "local",
+            "api": {
+                "anthropic_messages": "anthropic-messages",
+                "responses": "openai-responses",
+            }.get(route.transport, "openai-completions"),
+            "models": [
+                {
+                    "id": route.model,
+                    "name": route.model,
+                    # Declared catalog capabilities only; OpenClaw's defaults
+                    # (no reasoning, text only) stand for an unknown model.
+                    "input": ["text", "image"] if turn.vision else ["text"],
+                    **({"reasoning": True} if turn.reasoning else {}),
+                    **_declared_efforts(turn),
+                    "contextWindow": route.context_window,
+                    **({"maxTokens": route.max_output_tokens}
+                       if route.max_output_tokens is not None else {}),
+                }
+            ],
+        }
+        denied = list(_ALWAYS_DENIED)
+        if "web" in turn.denied_native:
+            denied += ["web_search", "web_fetch"]
+        # "ask" relays every exec approval over ACP; Jarvis answers it from the
+        # chat's stance (Bypass allows without a card), so the file does not
+        # change with the stance of whichever turn wrote it. The file tools
+        # ask through Dodaios' gate plugin the same way (``openclaw_gate``).
+        exec_mode = "deny" if "shell" in turn.denied_native else "ask"
+        gate = _gate_plugin(turn, home) if route.transport != "claude_cli" else None
+        if gate is None and not turn.auto_approve:
+            # Nothing could ask about a file change: outside Bypass it does
+            # not run at all (exec still asks over ACP).
+            denied += list(openclaw_gate.GATED_TOOLS)
+        if gate is not None and gate.get("config", {}).get("ask"):
+            # One ask tool, under the name the agent's instructions use.
+            denied.append(gate["config"]["ask"]["catalogName"])
+        config: dict[str, Any] = {
+            "gateway": {
+                "mode": "local",
+                "port": port,
+                "bind": "loopback",
+                "auth": {"mode": "token", "token": token},
+                # Nobody opens OpenClaw's own web UI here; building its
+                # assets cost seconds of CPU after every start.
+                "controlUi": {"enabled": False},
+            },
+            "models": {"mode": "replace", "providers": {RUNTIME_PROVIDER_NAME: provider}},
+            "agents": {
+                "defaults": {
+                    "model": {"primary": f"{RUNTIME_PROVIDER_NAME}/{route.model}"},
+                    "workspace": str(turn.workspace),
+                    # Nothing the person did not start may spend their key.
+                    "heartbeat": {"every": "0m"},
+                    # The identity comes from Jarvis; no persona files are
+                    # written into, or read from, the agent's workspace.
+                    "skipBootstrap": True,
+                    "contextInjection": "never",
+                }
+            },
+            # The thinking level travels with each prompt (``_meta.thinking``),
+            # so a changed effort never restarts the Gateway.
+            "session": {"reset": {"mode": "none"}},
+            # Dodaios pins and updates OpenClaw; no network check per start.
+            "update": {"checkOnStart": False},
+            # Heartbeat is only one background caller. The memory plugin can
+            # create dreaming jobs at startup even with heartbeat disabled.
+            # Jarvis owns memory and scheduling; neither may call this key.
+            "cron": {"enabled": False},
+            # Detached workshop reviews spend the model key after a turn,
+            # independently of cron and heartbeat. Jarvis owns that work.
+            "skills": {"workshop": {"autonomous": {"mode": "off"}}},
+            "plugins": {
+                "deny": list(_DENIED_PLUGINS),
+                "slots": {"memory": "none"},
+                "entries": {"memory-core": {"enabled": False}},
+            },
+            "tools": {
+                "deny": denied,
+                "exec": {"mode": exec_mode},
+                "toolSearch": _tool_search(
+                    route, _inline_catalog_tokens() if turn.mcp_url and turn.control_key else 0
+                ),
+            },
+            # The agent's log stays in its own folder, never in the shared
+            # temp-folder log every OpenClaw on the machine appends to.
+            "logging": {"file": str(home / "state" / "logs" / "openclaw.log")},
+        }
+        if gate is not None:
+            plugins = config["plugins"]
+            plugins["load"] = {"paths": [gate["path"]]}
+            plugins["entries"][openclaw_gate.PLUGIN_ID] = gate["entry"]
+        if route.transport == "claude_cli":
+            _use_claude_cli(config, turn)
+        if turn.mcp_url and turn.control_key:
+            from dodaios.agent_chat.dodaios_harness import HEADER_NAME
+            from dodaios.core.branding import MCP_TOOLS_SERVER_NAME
+
+            config["mcp"] = {
+                "servers": {
+                    MCP_TOOLS_SERVER_NAME: {
+                        "url": turn.mcp_url,
+                        "transport": "streamable-http",
+                        "headers": {
+                            "Authorization": f"Bearer ${{{_CONTROL_KEY_ENV}}}",
+                            # This turn's chat, so approvals, grants and the
+                            # turn context are that session's. Routine runs use
+                            # their own Gateway (``home_key``).
+                            HEADER_NAME: turn.session_id,
+                        },
+                    }
+                }
+            }
+        return config
+
+    # -------------------------------------------------------------- launch
+
+    async def launch(self, turn: RuntimeTurn) -> RuntimeLaunch:
+        status = await asyncio.to_thread(self.detect, fast=True)
+        if not status.ready:
+            raise RuntimeUnavailable(status.problem or "OpenClaw is not ready.")
+        launcher = _launcher()
+        if launcher is None:
+            raise RuntimeUnavailable("OpenClaw is not installed.")
+        key = home_key(turn.agent_id, turn.session_id)
+        # One turn at a time per Gateway: its config is this turn's.
+        release_slot = await self._slots.acquire(key)
+        try:
+            launch, gateway = await self._launch(turn, key, launcher, release_slot)
+        except BaseException:
+            release_slot()
+            raise
+        try:
+            if turn.warm:
+                launch.proc = await self._warm.lease(
+                    key, *self._warm_spec(key, launch, gateway)
+                )
+            return launch
+        except BaseException:
+            # The launch counts the Gateway as in use; only its release undoes it.
+            if launch.release is not None:
+                launch.release()
+            raise
+
+    async def warm(
+        self, turn: RuntimeTurn, latest_resume: Callable[[], str | None] | None = None
+    ) -> bool:
+        """Start the agent's Gateway and bridge before a message (no paid call).
+
+        The Gateway start is OpenClaw's slow part (16-46 s on Windows); done
+        while the person reads the chat, their message starts at the model.
+        Skipped unless the agent's turn slot is free right now. A warm-up
+        never resets the conversation: a fresh one is reset by its turn.
+        ``latest_resume`` re-reads the chat's conversation once the slot is
+        held (a turn may have finished since ``turn`` was built).
+        """
+        status = await asyncio.to_thread(self.detect)
+        launcher = _launcher()
+        if not status.ready or launcher is None:
+            return False
+        key = home_key(turn.agent_id, turn.session_id)
+        try:
+            release_slot = await self._slots.acquire(key, wait_s=_WARM_SLOT_WAIT_S)
+        except RuntimeUnavailable:
+            return False  # a turn (or another warm-up) has the agent right now
+        if latest_resume is not None:
+            turn.resume = latest_resume()
+        try:
+            launch, gateway = await self._launch(turn, key, launcher, release_slot)
+        except BaseException:
+            release_slot()
+            raise
+        try:
+            spec, want = self._warm_spec(key, launch, gateway)
+            if not gateway.warmed_up and turn.route.api_key:
+                gateway.warmed_up = await self._warm_up_run(key, spec, launch, turn)
+            return await self._warm.warm(key, spec, want if turn.resume is not None else None)
+        finally:
+            if launch.release is not None:
+                launch.release()
+
+    async def _warm_up_run(
+        self, key: str, spec: Any, launch: RuntimeLaunch, turn: RuntimeTurn
+    ) -> bool:
+        """The Gateway's first agent run, before the person's message.
+
+        A fresh Gateway sets its agent loop up on its first run (about 6 s on
+        Windows, measured; no setting skips it). This run pays it in a
+        session of its own, and Dodaios' model gateway answers its model call
+        itself (``gateway.warmup_prompt``): no provider call, nothing billed.
+        """
+        from dodaios.agent_runtimes import gateway as model_gateway
+        from dodaios.agent_runtimes.acp import session_params
+
+        token = turn.route.api_key or ""
+        if model_gateway.verify(token) is None:
+            # A route that does not go through Dodaios' model gateway (only
+            # test rigs build one): nothing could stop its call from billing.
+            return False
+        started = time.monotonic()
+        params = session_params(
+            str(launch.cwd), [], {"sessionKey": _WARMUP_SESSION_KEY, "resetSession": True}
+        )
+        with model_gateway.warming(token):
+            done = await self._warm.exercise(key, spec, params, "Reply with: ok")
+        log.info("agent runtimes: OpenClaw warm-up run for %s %s in %.1f s",
+                 key, "done" if done else "failed", time.monotonic() - started)
+        return done
+
+    def _warm_spec(
+        self, key: str, launch: RuntimeLaunch, gateway: _Gateway
+    ) -> tuple[Any, Any]:
+        """The bridge's launch and the session a turn wants on it.
+
+        The conversation lives in the Gateway under the agent's session key;
+        ``session/new`` names it (and resets it for a fresh conversation) in
+        its ``_meta``, so one bridge serves every turn of the agent."""
+        from dodaios import __version__
+        from dodaios.agent_runtimes.acp import session_params
+        from dodaios.agent_runtimes.warm import SessionWant, WarmSpec, signature
+
+        spec = WarmSpec(
+            argv=launch.argv,
+            env=launch.env,
+            cwd=launch.cwd,
+            # The bridge belongs to one Gateway run: a restarted Gateway (new
+            # config, new process) gets a new bridge.
+            signature=signature(
+                launch.argv, launch.env, str(launch.cwd), gateway.port, gateway.proc.pid
+            ),
+            client_version=__version__,
+        )
+        meta = launch.session_meta or {}
+        want = SessionWant(
+            resume=None,
+            params=session_params(str(launch.cwd), launch.mcp_servers, meta),
+            # A continued conversation: any open session on its key serves.
+            # A reset one: only a session opened (and reset) for it ahead.
+            bound=not meta.get("resetSession"),
+            # The session a reset turn opened serves the turns after it.
+            match=session_params(
+                str(launch.cwd), launch.mcp_servers,
+                {k: v for k, v in meta.items() if k != "resetSession"},
+            ),
+        )
+        return spec, want
+
+    async def _launch(
+        self,
+        turn: RuntimeTurn,
+        key: str,
+        launcher: list[str],
+        release_slot: Callable[[], None],
+    ) -> tuple[RuntimeLaunch, _Gateway]:
+        home = await asyncio.to_thread(agent_home, NAME, key)
+        token = await asyncio.to_thread(_gateway_token, home)
+        gateway_env = child_env(
+            {
+                **_EMBED_ENV,
+                **_state_env(home),
+                **turn.route.env(),
+                **({_CONTROL_KEY_ENV: turn.control_key} if turn.control_key else {}),
+            }
+        )
+        if turn.route.transport == "claude_cli" and turn.route.claude_binary:
+            # The bundled backend runs `claude` from the Gateway's PATH: the
+            # CLI the subscription was checked with comes first.
+            gateway_env["PATH"] = os.pathsep.join(
+                part for part in (
+                    str(Path(turn.route.claude_binary).parent), gateway_env.get("PATH", "")
+                ) if part
+            )
+        gateway = await self._ensure_gateway(turn, key, home, token, launcher, gateway_env)
+
+        def release() -> None:
+            gateway.last_used = time.monotonic()
+            gateway.in_use = max(0, gateway.in_use - 1)
+            release_slot()
+
+        argv = [
+            *launcher,
+            "acp",
+            "--url",
+            f"ws://127.0.0.1:{gateway.port}",
+            "--token-file",
+            str(home / "gateway.token"),
+        ]
+        launch = RuntimeLaunch(
+            argv=argv,
+            env=child_env({**_EMBED_ENV, **_state_env(home)}),
+            cwd=turn.workspace,
+            acp_resume=None,
+            vendor_session=session_key(turn.agent_id, turn.session_id),
+            release=release,
+            invalidate=lambda: setattr(gateway, "poisoned", True),
+            session_meta={
+                "sessionKey": session_key(turn.agent_id, turn.session_id),
+                # A fresh conversation (first turn, rollover): the Dodaios
+                # identity and recent transcript lead the prompt, so the old
+                # one must go.
+                "resetSession": turn.resume is None,
+            },
+            prompt_meta=prompt_meta(turn),
+            failure_replies=FAILURE_REPLIES,
+            failure_probe=lambda since: run_failure(home / "gateway.log", since),
+        )
+        return launch, gateway
+
+    async def _ensure_gateway(
+        self,
+        turn: RuntimeTurn,
+        key: str,
+        home: Path,
+        token: str,
+        launcher: list[str],
+        env: dict[str, str],
+    ) -> _Gateway:
+        """The running Gateway for ``key``, (re)started when anything changed.
+
+        Called with the turn slot held, so no other turn of this Gateway is in
+        flight: a restart never cuts one off. A changed config restarts too —
+        a running Gateway reloads its file on its own schedule, and this
+        turn's settings (model, tools, the MCP session header) must be the
+        ones it runs with.
+        """
+        async with self._gateway_lock(key):
+            env_hash = hashlib.sha256(
+                json.dumps(sorted(env.items())).encode("utf-8")
+            ).hexdigest()
+            current = self._gateways.get(key)
+            port = current.port if current is not None and current.alive() else _free_port()
+            # Off the event loop: the config sizes the live tool catalog.
+            config = await asyncio.to_thread(self.config_for, turn, port=port, token=token)
+            changed = await asyncio.to_thread(
+                write_json_if_changed, home / "openclaw.json", config
+            )
+            if current is not None and (
+                not current.alive() or current.poisoned or current.env_hash != env_hash or changed
+            ):
+                await self._stop_gateway(current)
+                current = None
+            if current is None:
+                await self._make_room(key)
+                current = await self._start_gateway(
+                    turn, key, home, port, token, env_hash, launcher, env
+                )
+                self._gateways[key] = current
+            current.in_use += 1
+            current.last_used = time.monotonic()
+            self._ensure_reaper()
+            return current
+
+    def _gateway_lock(self, key: str) -> asyncio.Lock:
+        return self._locks.setdefault(key, asyncio.Lock())
+
+    async def _make_room(self, starting: str) -> None:
+        """Stop the least recently used idle Gateway(s) above :data:`_MAX_GATEWAYS`."""
+        idle = [
+            g for k, g in self._gateways.items()
+            if k != starting and g.in_use == 0 and not self._gateway_lock(k).locked()
+        ]
+        while len(self._gateways) >= _MAX_GATEWAYS and idle:
+            oldest = min(idle, key=lambda g: g.last_used)
+            idle.remove(oldest)
+            log.info("agent runtimes: stopping OpenClaw gateway %s for %s", oldest.key, starting)
+            await self._warm.stop({oldest.key})
+            await self._stop_gateway(oldest)
+
+    async def _start_gateway(
+        self,
+        turn: RuntimeTurn,
+        key: str,
+        home: Path,
+        port: int,
+        token: str,
+        env_hash: str,
+        launcher: list[str],
+        env: dict[str, str],
+    ) -> _Gateway:
+        # The folder's Gateway belongs to one process: an app that died without
+        # stopping it (crash, force-quit, kill) left its pid behind.
+        lock = HomeFileLock(home / "gateway.lock")
+        if not await asyncio.to_thread(lock.try_acquire):
+            raise RuntimeUnavailable(
+                "Another Dodaios process runs this agent's OpenClaw right now. Close it, "
+                "then try again."
+            )
+        try:
+            await asyncio.to_thread(_reap_stale_gateway, home)
+            build = await asyncio.to_thread(self._installed_build)
+            if await asyncio.to_thread(_upgraded_since_last_start, home, build):
+                # A new release may need the agent's database migrated; the
+                # Gateway refuses every message until it is (2026.10.8: "uses
+                # schema version 24; run openclaw doctor --fix"). No Gateway of
+                # this folder runs now: the migration has the database alone.
+                log.info("agent runtimes: OpenClaw changed for %s (%s); migrating its data",
+                         key, build)
+                await _migrate(launcher, env, home)
+            gateway = await self._spawn_until_ready(key, home, port, env_hash, launcher, env, lock)
+            if gateway is None:
+                # The port was taken before the Gateway bound it: once more on a
+                # fresh port.
+                port = _free_port()
+                config = await asyncio.to_thread(self.config_for, turn, port=port, token=token)
+                await asyncio.to_thread(write_json_if_changed, home / "openclaw.json", config)
+                gateway = await self._spawn_until_ready(
+                    key, home, port, env_hash, launcher, env, lock, last_try=True
+                )
+            assert gateway is not None
+            gateway = await self._admitted(gateway, env_hash, launcher, env, lock)
+            await asyncio.to_thread(_remember_build, home, build)
+            return gateway
+        except BaseException:
+            lock.release()
+            raise
+
+    def _installed_build(self) -> str:
+        """The installed release's ``--version`` line ("" when unknown)."""
+        status = self.detect(fast=True)
+        return status.build or status.version
+
+    async def _admitted(
+        self,
+        gateway: _Gateway,
+        env_hash: str,
+        launcher: list[str],
+        env: dict[str, str],
+        lock: HomeFileLock,
+    ) -> _Gateway:
+        """``gateway`` once its agent database admits messages.
+
+        ``/healthz`` answers before the Gateway finished inspecting the agent's
+        database; a message sent meanwhile is refused (UNAVAILABLE "has not
+        completed startup inspection and preparation"). A database an older
+        release wrote stays refused until ``openclaw doctor --fix`` migrated
+        it: that runs once, with the Gateway stopped, then the Gateway starts
+        again. A database still refused after it fails the start with the
+        reason, never a turn that silently goes nowhere.
+        """
+        log_path = gateway.home / "gateway.log"
+        try:
+            state = await _await_admission(log_path, gateway.proc)
+            if state != "degraded":
+                return gateway
+            reason = _degraded_reason(log_path)
+            log.warning("agent runtimes: OpenClaw data of %s needs a migration: %s",
+                        gateway.key, reason)
+            await self._stop_gateway(gateway, keep_lock=True)
+            migrated = await _migrate(launcher, env, gateway.home)
+            gateway = await self._spawn_until_ready(
+                gateway.key, gateway.home, gateway.port, env_hash, launcher, env, lock,
+                last_try=True,
+            )
+            assert gateway is not None
+            state = await _await_admission(log_path, gateway.proc)
+        except BaseException:
+            # Never a Gateway left behind with the key in its environment.
+            if gateway.alive():
+                await asyncio.shield(self._stop_gateway(gateway, keep_lock=True))
+            raise
+        if state != "degraded":
+            log.info("agent runtimes: OpenClaw data of %s migrated", gateway.key)
+            return gateway
+        await self._stop_gateway(gateway, keep_lock=True)
+        reason = _degraded_reason(log_path) or reason
+        log.error("agent runtimes: OpenClaw data of %s still needs repair after doctor --fix: %s",
+                  gateway.key, reason)
+        raise RuntimeUnavailable(_repair_failed_message(reason, migrated))
+
+    async def _spawn_until_ready(
+        self,
+        key: str,
+        home: Path,
+        port: int,
+        env_hash: str,
+        launcher: list[str],
+        env: dict[str, str],
+        lock: HomeFileLock,
+        *,
+        repaired: bool = False,
+        last_try: bool = False,
+    ) -> _Gateway | None:
+        """Start the Gateway and wait until it answers; ``None`` = retry on a new port."""
+        from dodaios.core.process_tree import DescendantTracker, make_process_tree
+        from dodaios.core.process_utils import NO_WINDOW_CREATIONFLAGS
+
+        log_path = home / "gateway.log"
+        # One run's log at a time: it can quote prompts, so it never grows on.
+        handle = log_path.open("wb")
+        tree = make_process_tree(f"openclaw-gateway-{key}")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *launcher,
+                "gateway",
+                "run",
+                "--port",
+                str(port),
+                "--allow-unconfigured",
+                cwd=str(home),
+                env=env,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=handle,
+                stderr=handle,
+                creationflags=NO_WINDOW_CREATIONFLAGS,
+                start_new_session=os.name != "nt",
+            )
+        except (OSError, ValueError) as exc:
+            handle.close()
+            tree.close()
+            raise RuntimeUnavailable(f"OpenClaw could not start: {exc}") from exc
+        tree.assign(proc.pid)
+        tracker = DescendantTracker(proc.pid, interval_s=5.0)
+        tracker.start()
+        gateway = _Gateway(key, home, port, env_hash, proc, tree, handle, lock, tracker)
+        await asyncio.to_thread(_write_pid_file, home, proc.pid, port)
+        log.info("agent runtimes: OpenClaw gateway %s starting on %s", key, port)
+        started = time.monotonic()
+        try:
+            deadline = started + _START_TIMEOUT_S
+            while time.monotonic() < deadline:
+                if proc.returncode is not None:
+                    break
+                if await _healthy(port) and proc.returncode is None:
+                    return gateway
+                await asyncio.sleep(0.1)
+        except BaseException:
+            # A cancelled turn (Stop during a cold start) must not leave a
+            # Gateway behind with the key in its environment.
+            await asyncio.shield(self._stop_gateway(gateway, keep_lock=True))
+            raise
+        returncode = proc.returncode
+        await self._stop_gateway(gateway, keep_lock=True)
+        if returncode == _EXIT_CONFIG and not repaired:
+            log.warning("agent runtimes: OpenClaw rejected its config; running doctor --fix")
+            await _run_doctor(launcher, env, home)
+            return await self._spawn_until_ready(
+                key, home, port, env_hash, launcher, env, lock,
+                repaired=True, last_try=last_try,
+            )
+        if returncode is not None and returncode != _EXIT_CONFIG and not last_try:
+            if time.monotonic() - started < _START_TIMEOUT_S / 2:
+                return None
+        tail = _log_tail(log_path)
+        if returncode is None:
+            raise RuntimeUnavailable("OpenClaw did not start within two minutes." + tail)
+        raise RuntimeUnavailable(f"OpenClaw stopped while starting (exit {returncode})." + tail)
+
+    async def _stop_gateway(self, gateway: _Gateway, *, keep_lock: bool = False) -> None:
+        if self._gateways.get(gateway.key) is gateway:
+            del self._gateways[gateway.key]
+        if gateway.proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                gateway.proc.terminate()
+            try:
+                await asyncio.wait_for(gateway.proc.wait(), timeout=10)
+            except TimeoutError:
+                log.info("agent runtimes: OpenClaw gateway %s ignored terminate", gateway.port)
+        # Closing the container reaps whatever the Gateway started (MCP servers,
+        # exec children), including a Gateway that ignored terminate; the
+        # tracker reaps children that left its process group (POSIX).
+        gateway.tree.close()
+        gateway.tracker.close()
+        with contextlib.suppress(OSError):
+            gateway.log_handle.close()
+        with contextlib.suppress(OSError):
+            _pid_file(gateway.home).unlink()
+        if not keep_lock:
+            gateway.lock.release()
+
+    def _ensure_reaper(self) -> None:
+        if self._reaper is None or self._reaper.done():
+            self._reaper = asyncio.get_running_loop().create_task(self._reap_idle())
+
+    async def _reap_idle(self) -> None:
+        while self._gateways:
+            await asyncio.sleep(60)
+            for key in list(self._gateways):
+                async with self._gateway_lock(key):
+                    gateway = self._gateways.get(key)
+                    if gateway is None or gateway.in_use > 0:
+                        continue
+                    idle = time.monotonic() - gateway.last_used
+                    if not gateway.alive() or idle > IDLE_STOP_S:
+                        log.info("agent runtimes: stopping idle OpenClaw gateway %s", key)
+                        await self._warm.stop({key})
+                        await self._stop_gateway(gateway)
+
+    def busy(self) -> bool:
+        return self._slots.busy()
+
+    async def stop(self, agent_id: str | None = None) -> None:
+        await self._warm.stop(None if agent_id is None else {agent_id, f"{agent_id}~runs"})
+        for key, gateway in list(self._gateways.items()):
+            if agent_id is None or key in (agent_id, f"{agent_id}~runs"):
+                async with self._gateway_lock(key):
+                    await self._stop_gateway(gateway)
+
+
+def _gate_plugin(turn: RuntimeTurn, home: Path) -> dict[str, Any] | None:
+    """Dodaios' gate plugin for this agent's Gateway, or ``None`` without tools.
+
+    The plugin asks Dodaios before every native file change and offers the
+    ask tool by its plain name (``openclaw_gate``). It needs the agent's
+    Dodaios tools (the control key and the MCP endpoint): a turn without them
+    has nothing to ask with.
+    """
+    if not (turn.mcp_url and turn.control_key):
+        return None
+    from dodaios.core.branding import MCP_TOOLS_SERVER_NAME
+    from dodaios.society.routine_runner import is_routine_session
+
+    installed = openclaw_gate.install(home)
+    plugin_config: dict[str, Any] = {
+        "gateUrl": openclaw_gate.approval_url(turn.mcp_url),
+        "session": turn.session_id,
+        # A new plugin build is a config change: the Gateway restarts on it.
+        "build": installed.digest,
+    }
+    if not is_routine_session(turn.session_id):
+        # A routine runs unattended: nobody could answer a question there.
+        plugin_config["mcpUrl"] = turn.mcp_url
+        plugin_config["ask"] = openclaw_gate.ask_spec(MCP_TOOLS_SERVER_NAME)
+    return {
+        "path": str(installed.path),
+        "config": plugin_config,
+        "entry": {
+            "enabled": True,
+            "hooks": {"timeouts": {"before_tool_call": openclaw_gate.HOOK_TIMEOUT_MS}},
+            "config": plugin_config,
+        },
+    }
+
+
+def _use_claude_cli(config: dict[str, Any], turn: RuntimeTurn) -> None:
+    """Run the agent on the Claude subscription through OpenClaw's bundled
+    ``claude-cli`` backend (``docs/gateway/cli-backends.md`` of OpenClaw).
+
+    Claude Code owns the login and its renewal; OpenClaw never reads or
+    forwards its token and sends no Anthropic API request. Dodaios' model
+    gateway is not configured at all, so no model call of this agent can
+    reach the HTTP API, which bills a third-party login as Extra Usage.
+
+    Claude's native tools ask for approval on OpenClaw's plugin-approval
+    channel, which the ACP bridge does not relay. So the chat's stance is
+    applied here instead of per call: Bypass runs them, any other stance
+    refuses them at once (``deny`` never prompts, so a turn cannot hang on an
+    approval nobody sees). Dodaios' own MCP tools keep their approvals.
+    """
+    model_ref = f"anthropic/{turn.route.model}"
+    config.pop("models", None)
+    defaults = config["agents"]["defaults"]
+    defaults["model"] = {"primary": model_ref}
+    defaults["models"] = {model_ref: {"agentRuntime": {"id": "claude-cli"}}}
+    tools = config["tools"]
+    tools["exec"]["mode"] = "full" if turn.auto_approve else "deny"
+    if "shell" in turn.denied_native:
+        tools["deny"] = [*tools["deny"], "exec", "process"]
+
+
+#: Windows below this always get deferred tool schemas: OpenClaw's own system
+#: prompt and native tools already take a large share of them.
+_SMALL_WINDOW: Final = 128_000
+#: The largest share of the window an inline tool catalog may take; the rest
+#: is the conversation, OpenClaw's own prompt and the reply.
+_INLINE_CATALOG_SHARE: Final = 0.25
+#: Characters per token for the catalog estimate (JSON schemas, English text).
+_CHARS_PER_TOKEN: Final = 4
+
+
+def _inline_catalog_tokens() -> int:
+    """An estimate of what Dodaios' MCP tools cost as inline schemas.
+
+    Counted from the live tool catalog (names, descriptions, input schemas),
+    so a person with many connected plugins gets the real size. ``0`` when
+    the catalog cannot be read: nothing is offered then.
+    """
+    try:
+        from dodaios.mcp.dodaios_tools_server import offered_tools
+
+        entries = offered_tools()
+    except Exception:  # noqa: BLE001 — an unreadable catalog offers nothing
+        log.debug("agent runtimes: tool catalog size unavailable", exc_info=True)
+        return 0
+    chars = 0
+    for entry in entries:
+        try:
+            schema = json.dumps(getattr(entry, "input_schema", None) or {}, default=str)
+        except (TypeError, ValueError):  # an unserializable schema counts name and description
+            schema = ""
+        chars += len(str(entry.name)) * 2 + len(str(entry.description or "")) + len(schema) + 32
+    return chars // _CHARS_PER_TOKEN
+
+
+def _tool_search(route: Any, catalog_tokens: int) -> Any:
+    """``tools.toolSearch``: deferred tool schemas wherever inline ones do not fit.
+
+    Deferred (``{"mode": "tools"}``) keeps every tool callable through
+    ``tool_search`` / ``tool_describe`` / ``tool_call`` behind a bounded
+    directory that OpenClaw sizes to the model's window. It is chosen when:
+
+    - the route is the ChatGPT subscription (``responses``): its backend ends
+      a request carrying the whole inline catalog (live 2026-10-27: ~400
+      tools, ~580 KB of schemas) as ``response.incomplete`` before any output;
+      the failing slices all held the catalog's only ``oneOf`` schemas;
+    - the model runs on the person's own server (Ollama, a local OpenAI
+      server): prefill of a large catalog is slow there, and live 2026-10-27
+      ~239 inline tools estimated 225k tokens against a 64k Ollama window, so
+      even "ok" overflowed and compaction timed out;
+    - the window is small (below :data:`_SMALL_WINDOW`);
+    - the inline catalog would take more than :data:`_INLINE_CATALOG_SHARE`
+      of the window.
+
+    Otherwise a large cloud window gets the schemas directly: no discovery
+    round-trips, and smaller catalogs are cheaper inline. The Claude CLI route
+    runs its own tool surface and keeps direct schemas.
+    """
+    from dodaios.agent_runtimes.model_map import is_local
+
+    transport = getattr(route, "transport", "")
+    if transport == "claude_cli":
+        return False
+    window = int(getattr(route, "context_window", 0) or 0)
+    if (
+        transport == "responses"
+        or is_local(str(getattr(route, "provider", "")))
+        or window < _SMALL_WINDOW
+        or catalog_tokens > window * _INLINE_CATALOG_SHARE
+    ):
+        return {"mode": "tools"}
+    return False
+
+
+def _declared_efforts(turn: RuntimeTurn) -> dict[str, Any]:
+    """The model's ``compat`` entry: the effort levels its catalog lists.
+
+    Without it OpenClaw offers a reasoning model ``off`` .. ``high`` only and
+    refuses ``xhigh`` / ``max`` although the model takes them."""
+    if not turn.reasoning or not turn.efforts:
+        return {}
+    levels = [level for level in _DECLARED_EFFORTS if level in turn.efforts]
+    return {"compat": {"supportedReasoningEfforts": levels}} if levels else {}
+
+
+def thinking_levels(turn: RuntimeTurn) -> tuple[str, ...]:
+    """The levels OpenClaw accepts for this turn's model, on Dodaios' ladder
+    (``none`` = OpenClaw's ``off``), as :meth:`OpenClawRuntime.config_for`
+    declares the model."""
+    if turn.route.transport == "claude_cli":
+        # OpenClaw's own Claude policy answers for the Claude CLI route.
+        return ("none", *sorted(_THINKING_LEVELS - {"off"}, key=ORDER.index))
+    if not turn.reasoning:
+        return ("none",)
+    declared = _declared_efforts(turn).get("compat", {}).get("supportedReasoningEfforts", [])
+    return (*_BASE_THINKING, *(level for level in ("xhigh", "max") if level in declared))
+
+
+def prompt_meta(turn: RuntimeTurn) -> dict[str, Any] | None:
+    """``session/prompt`` ``_meta``: the agent's thinking level for this prompt.
+
+    Per prompt, not ``thinkingDefault`` in the config: a changed effort then
+    never restarts the Gateway. No level = the model's own default.
+
+    OpenClaw refuses the whole turn for a level the model does not offer (in
+    its view), so the effort folds onto :func:`thinking_levels` first: the
+    highest level at or below the pick (``ultra`` -> the highest one), never
+    a level outside the set. A model not declared to reason gets no level
+    unless the pick is "none". The upstream model still runs on the agent's
+    own effort: Dodaios' gateway applies it per turn (``watch_failure``).
+    """
+    effort = (turn.effort or "").strip().lower()
+    if effort not in ORDER:
+        return None
+    levels = thinking_levels(turn)
+    if levels == ("none",) and effort != "none":
+        return None
+    level = snap_to_ladder(effort, levels)
+    thinking = "off" if level == "none" else level
+    return {"thinking": thinking} if thinking in _THINKING_LEVELS else None
+
+
+def session_key(agent_id: str, chat_session_id: str) -> str:
+    """The Gateway session for a chat: the agent's one conversation, or a
+    separate one per routine run so a run never resets the main chat."""
+    if chat_session_id == f"society:{agent_id}":
+        return SESSION_KEY
+    digest = hashlib.sha256(chat_session_id.encode("utf-8")).hexdigest()[:16]
+    return f"agent:main:run-{digest}"
+
+
+def _state_env(home: Path) -> dict[str, str]:
+    return {
+        "OPENCLAW_STATE_DIR": str(home / "state"),
+        "OPENCLAW_CONFIG_PATH": str(home / "openclaw.json"),
+    }
+
+
+def _gateway_token(home: Path) -> str:
+    """The agent's loopback Gateway token, minted once and kept in its folder."""
+    path = home / "gateway.token"
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+        if token:
+            return token
+    except OSError:  # no token yet: one is minted below
+        pass
+    token = secrets.token_urlsafe(32)
+    # Readable by this user only from its first byte (POSIX 0600).
+    write_if_changed(path, token, private=True)
+    (home / "state").mkdir(parents=True, exist_ok=True, mode=0o700)
+    return token
+
+
+async def _run_doctor(
+    launcher: list[str], env: dict[str, str], home: Path, *, timeout_s: float | None = None
+) -> int | None:
+    """``openclaw doctor --fix`` on the agent's state folder, non-interactive.
+
+    ``env`` carries the folder's ``OPENCLAW_STATE_DIR`` / ``OPENCLAW_CONFIG_PATH``,
+    so the doctor repairs this agent's config and database and nothing of the
+    person's own OpenClaw. Its output goes to ``doctor.log`` in the folder.
+    Returns its exit code (``None`` = it could not start or was stopped).
+    """
+    from dodaios.core.process_tree import make_process_tree
+    from dodaios.core.process_utils import NO_WINDOW_CREATIONFLAGS
+
+    tree = make_process_tree("openclaw-doctor")
+    proc: asyncio.subprocess.Process | None = None
+    handle = None
+    try:
+        handle = (home / "doctor.log").open("wb")
+        proc = await asyncio.create_subprocess_exec(
+            *launcher,
+            "doctor",
+            "--fix",
+            "--yes",
+            "--non-interactive",
+            cwd=str(home),
+            env=env,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=handle,
+            stderr=handle,
+            creationflags=NO_WINDOW_CREATIONFLAGS,
+            start_new_session=os.name != "nt",
+        )
+        tree.assign(proc.pid)
+        return await asyncio.wait_for(
+            proc.wait(), timeout=_DOCTOR_TIMEOUT_S if timeout_s is None else timeout_s
+        )
+    except (OSError, TimeoutError) as exc:
+        log.warning("agent runtimes: openclaw doctor --fix failed: %s", exc)
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError, OSError):
+                proc.kill()
+        return None
+    finally:
+        # Never leave a doctor running: the next start reads the same config.
+        tree.close()
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
+
+
+async def _migrate(launcher: list[str], env: dict[str, str], home: Path) -> bool:
+    """The runtime's own migration of the agent's data; True when it succeeded."""
+    started = time.monotonic()
+    code = await _run_doctor(launcher, env, home, timeout_s=_MIGRATE_TIMEOUT_S)
+    elapsed = time.monotonic() - started
+    if code == 0:
+        log.info("agent runtimes: openclaw doctor --fix for %s done in %.1f s", home.name, elapsed)
+        return True
+    log.warning(
+        "agent runtimes: openclaw doctor --fix for %s ended with %s after %.1f s:%s",
+        home.name, code, elapsed, _log_tail(home / "doctor.log", 4),
+    )
+    return False
+
+
+def _has_agent_data(home: Path) -> bool:
+    """Whether the agent's state folder holds an OpenClaw agent database."""
+    agents = home / "state" / "agents"
+    try:
+        return any(agents.glob("*/agent/*.sqlite"))
+    except OSError:  # an unreadable folder: nothing to migrate from here
+        return False
+
+
+def _upgraded_since_last_start(home: Path, build: str) -> bool:
+    """Whether the folder's data was last used by another OpenClaw release.
+
+    Only a folder that recorded its release and holds a database counts: a
+    new agent has nothing to migrate, and a folder from before this record
+    existed is caught by the admission check when its Gateway starts.
+    """
+    if not build:
+        return False
+    try:
+        previous = (home / _BUILD_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:  # never recorded: nothing to compare with
+        return False
+    return bool(previous) and previous != build and _has_agent_data(home)
+
+
+def _remember_build(home: Path, build: str) -> None:
+    if build:
+        write_if_changed(home / _BUILD_MARKER, build + "\n")
+
+
+def admission_state(text: str) -> str:
+    """``ready`` / ``pending`` / ``degraded`` from the Gateway's log of this run."""
+    if _ADMISSION_DEGRADED.search(text):
+        return "degraded"
+    if any(marker in text for marker in _ADMISSION_PENDING) and not any(
+        marker in text for marker in _ADMISSION_RECOVERED
+    ):
+        return "pending"
+    return "ready"
+
+
+def _read_log(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:  # not written yet: the caller polls again
+        return ""
+
+
+async def _await_admission(log_path: Path, proc: asyncio.subprocess.Process) -> str:
+    """Wait until the Gateway's agent database admits messages (or never will).
+
+    Returns ``ready``, ``degraded``, or ``pending`` when :data:`_ADMISSION_WAIT_S`
+    passed first (the turn then retries a refused message on its own).
+    """
+    deadline = time.monotonic() + _ADMISSION_WAIT_S
+    started = time.monotonic()
+    waited = False
+    while True:
+        state = admission_state(await asyncio.to_thread(_read_log, log_path))
+        if state != "pending" or proc.returncode is not None:
+            if waited:
+                log.info("agent runtimes: OpenClaw admission %s after %.1f s",
+                         state, time.monotonic() - started)
+            return state
+        if time.monotonic() >= deadline:
+            log.warning("agent runtimes: OpenClaw admission still pending after %.0f s",
+                        _ADMISSION_WAIT_S)
+            return state
+        waited = True
+        await asyncio.sleep(0.25)
+
+
+def _degraded_reason(log_path: Path) -> str:
+    text = _read_log(log_path)
+    for line in text.splitlines():
+        if _ADMISSION_DEGRADED.search(line):
+            match = _DEGRADED_REASON.search(line)
+            reason = match.group(1) if match else line.strip()
+            reason = _SECRET_SHAPES.sub("[redacted]", " ".join(reason.split()))
+            return reason[:300]
+    return ""
+
+
+def _repair_failed_message(reason: str, migrated: bool) -> str:
+    detail = f" ({reason})" if reason else ""
+    ran = "ran" if migrated else "tried"
+    return (
+        "OpenClaw cannot open this agent's saved data after its update"
+        f"{detail}. Dodaios {ran} OpenClaw's own repair (openclaw doctor --fix), but the "
+        "data still needs it. Your message was not sent; the details are in doctor.log in "
+        "the agent's OpenClaw folder."
+    )
+
+
+def _log_tail(path: Path, lines: int = 6) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:  # no log to quote: the start error stands on its own
+        return ""
+    tail = [line for line in text.splitlines() if line.strip()][-lines:]
+    return ("\n" + "\n".join(tail)) if tail else ""

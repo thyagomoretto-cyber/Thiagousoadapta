@@ -1,0 +1,870 @@
+"""Client side of one Agent Client Protocol (ACP) prompt turn.
+
+ACP is JSON-RPC 2.0 over the agent process' stdio, one JSON object per line
+(https://agentclientprotocol.com). Hermes (``hermes acp``) and OpenClaw
+(``openclaw acp``) both speak it, and it is the interface their projects
+version and document for embedding hosts — which is why Jarvis drives them
+through it instead of their CLI flags or internal APIs: an upstream update
+keeps working as long as the protocol does.
+
+One :class:`AcpTurn` drives one process from handshake to the prompt's
+response (a warm process, ``warm.Lease``, starts at the session or the prompt):
+
+1. ``initialize`` (protocol version + client capabilities),
+2. ``session/load`` of the stored conversation, or ``session/new``,
+3. ``session/prompt`` with the turn's text,
+
+and translates every ``session/update`` notification into agent-chat events
+(``assistant_text``, ``reasoning``, ``tool_call``, ``tool_result``,
+``usage_delta``). The agent's own ``session/request_permission`` requests are
+answered from the chat's approval card. History replayed during
+``session/load`` is swallowed: the chat already shows it.
+
+The class is transport-free: the CLI runner pumps lines into
+:meth:`AcpTurn.on_message` and supplies an :class:`AcpIO` for writing frames,
+emitting events and asking the person. That keeps process ownership (job
+objects, cancellation, remote placement, rollover) in one place.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+import time
+import uuid
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any, Final, Protocol
+
+from dodaios.agent_chat.events import make_event
+from dodaios.agent_chat.turn_errors import gateway_unavailable_reason
+from dodaios.core.mcp_names import CLI_TOOL_PREFIX, TOOLS_SERVER_NAMES, cli_tool_name
+
+log = logging.getLogger(__name__)
+
+#: ACP protocol major version this client speaks.
+PROTOCOL_VERSION: Final[int] = 1
+
+_INITIALIZE_ID: Final[int] = 1
+_SESSION_ID: Final[int] = 2
+_PROMPT_ID: Final[int] = 3
+
+#: Error text the CLI runner's resume-lost detection recognises
+#: (``runner_cli._RESUME_LOST_MARKERS``) so a vanished conversation is
+#: retried fresh with the transcript in front.
+RESUME_LOST_ERROR: Final[str] = "ACP session not found"
+
+#: JSON-RPC "method not found".
+_METHOD_NOT_FOUND: Final[int] = -32601
+
+#: ``stopReason`` values that end a turn before its answer was complete.
+_STOPPED_EARLY: Final[dict[str, str]] = {
+    "max_tokens": "The answer stopped at the model's output limit.",
+    "max_turn_requests": "The agent reached its step limit for one turn.",
+    "cancelled": "The turn was cancelled before it finished.",
+}
+
+#: ``mcp_<server>_<tool>`` (Hermes), ``<server>__<tool>`` and
+#: ``<server>.<tool>`` spellings of a tool on this app's own MCP server, per
+#: name that server is registered under. Normalised to the
+#: ``mcp__<server>__<tool>`` form the society checkpoints and quests read.
+_OWN_TOOL_PREFIXES: Final[tuple[tuple[str, str], ...]] = tuple(
+    (prefix, server)
+    for server in TOOLS_SERVER_NAMES
+    for prefix in (f"mcp_{server}_", f"{server}__", f"{server}.")
+)
+_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z_][\w.:-]{0,120}$")
+
+#: What a ``cancelled`` stop reason means when this client never sent
+#: ``session/cancel``: the runtime ended the run on its own (OpenClaw does so
+#: for a run that failed before its reply).
+_ENDED_BY_RUNTIME: Final[str] = "The runtime ended the run before it finished."
+
+#: Replies a runtime keeps out of the chat on purpose (OpenClaw's silent tokens).
+_SILENT_REPLY: Final[re.Pattern[str]] = re.compile(r"^\W*(NO_REPLY|HEARTBEAT_OK)\W*$")
+
+
+class AcpIO(Protocol):
+    """What a turn needs from its host."""
+
+    async def write(self, frame: dict[str, Any]) -> None: ...
+
+    async def emit(self, event: dict[str, Any]) -> None: ...
+
+    async def ask(self, call_id: str, name: str, args: dict[str, Any], summary: str) -> str:
+        """Answer ``allow`` / ``allow_always`` / ``deny`` / ``cancel``."""
+        ...
+
+
+@dataclass(slots=True)
+class McpServer:
+    """One MCP server handed to the agent with ``session/new``/``session/load``."""
+
+    name: str
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    command: str = ""
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+
+    def to_acp(self) -> dict[str, Any]:
+        if self.command:
+            return {
+                "name": self.name,
+                "command": self.command,
+                "args": list(self.args),
+                "env": [{"name": k, "value": v} for k, v in self.env.items()],
+            }
+        return {
+            "type": "http",
+            "name": self.name,
+            "url": self.url,
+            "headers": [{"name": k, "value": v} for k, v in self.headers.items()],
+        }
+
+
+def normalize_tool_name(name: str) -> str:
+    """Give a tool on this app's MCP server the ``mcp__<server>__<tool>`` name it is read by.
+
+    The server part stays the one the runtime used: a session mounted under an
+    earlier name keeps reporting it, and every reader accepts both.
+    """
+    if name.startswith(CLI_TOOL_PREFIX):
+        return name
+    for prefix, server in _OWN_TOOL_PREFIXES:
+        if name.startswith(prefix):
+            return cli_tool_name(name[len(prefix) :], server)
+    return name
+
+
+def _content_text(content: Any) -> str:
+    """Text of an ACP content block, a list of them, or a tool-call content list."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(_content_text(item) for item in content)
+    if isinstance(content, dict):
+        if content.get("type") == "text":
+            return str(content.get("text") or "")
+        if content.get("type") == "content":
+            return _content_text(content.get("content"))
+        if content.get("type") == "diff":
+            return f"edited {content.get('path') or 'a file'}"
+        if "text" in content:
+            return str(content.get("text") or "")
+    return ""
+
+
+@dataclass(slots=True)
+class AcpTurn:
+    """State of one ACP turn; mirrors the CLI runner's per-shape state fields."""
+
+    turn_id: str
+    cwd: str
+    prompt_text: str
+    resume: str | None = None
+    mcp_servers: list[McpServer] = field(default_factory=list)
+    #: Answer the agent's permission requests with "allow" without asking
+    #: (the chat's Bypass stance). Jarvis' own gates on MCP tools still apply.
+    auto_allow: bool = False
+    #: Refuse every permission request without asking (Plan mode: read only).
+    auto_deny: bool = False
+    #: "Always ask": an "allow always" answer allows this one call only.
+    always_ask: bool = False
+    #: Native tools the person allowed for the rest of the chat ("allow
+    #: always" on a native tool's card, :meth:`native_permission`). Shared
+    #: with the chat, which owns the set.
+    native_always: set[str] = field(default_factory=set)
+    #: The answers the model gateway gave this turn, ``(text, tool calls)``
+    #: oldest first (``gateway.turn_replies``). OpenClaw's bridge streams a
+    #: turn's later messages as offsets into the previous one, cutting their
+    #: start off; the shown text is repaired from these.
+    reply_texts: Callable[[], list[tuple[str, int]]] | None = None
+    client_name: str = "dodaios"
+    client_version: str = ""
+    #: What the chat stores as its vendor session instead of the ACP session
+    #: id (OpenClaw addresses the conversation by a fixed session key).
+    report_session: str | None = None
+    #: A warm process (``warm.Lease``) answered ``initialize`` already: its
+    #: result, so the turn starts at the session instead of the handshake.
+    initialized: dict[str, Any] | None = None
+    #: The ACP session already open in that process with this turn's
+    #: parameters: the turn goes straight to ``session/prompt``.
+    open_session: str = ""
+    #: ``_meta`` of ``session/new`` / ``session/load`` (OpenClaw: which
+    #: Gateway session, and whether to reset it) and of ``session/prompt``
+    #: (OpenClaw: this prompt's thinking level).
+    session_meta: dict[str, Any] | None = None
+    prompt_meta: dict[str, Any] | None = None
+    #: Replies the runtime posts as the assistant's message when the turn
+    #: failed before any model call (OpenClaw: an unsupported thinking level,
+    #: an interruption). The first group of a match is the reason; such a
+    #: reply ends the turn as an error instead of showing as the answer.
+    failure_replies: tuple[re.Pattern[str], ...] = ()
+
+    # --- fields the CLI runner reads after the turn ---
+    vendor_session: str | None = None
+    status: str = "done"
+    error: str | None = None
+    usage: dict[str, int] = field(default_factory=dict)
+    cost_usd: float | None = None
+    emitted_text: bool = False
+    result_text: str = ""
+    saw_result: bool = False
+    stop_reason: str = ""
+    emitted_tool_ids: set[str] = field(default_factory=set)
+    #: The runtime answered ``session/prompt`` with a result: its process and
+    #: the Gateway behind it work, whatever the turn's own outcome.
+    prompt_answered: bool = False
+
+    # --- what the agent announced in ``initialize`` ---
+    agent_name: str = ""
+    agent_version: str = ""
+    can_load: bool = False
+
+    _acp_session: str = field(default="", init=False)
+    _replaying: bool = field(default=False, init=False)
+    _text_id: str = field(default="", init=False)
+    _text_parts: list[str] = field(default_factory=list, init=False)
+    _thought_parts: list[str] = field(default_factory=list, init=False)
+    _thought_started: float | None = field(default=None, init=False)
+    _tool_names: dict[str, str] = field(default_factory=dict, init=False)
+    _tool_started: dict[str, float] = field(default_factory=dict, init=False)
+    _finished_tools: set[str] = field(default_factory=set, init=False)
+    _failure_reply: str = field(default="", init=False)
+    _cancel_sent: bool = field(default=False, init=False)
+    #: Text was shown after the last tool call (``_flush_text``).
+    _text_since_tool: bool = field(default=False, init=False)
+
+    # ------------------------------------------------------------------ frames
+
+    def opening_frame(self) -> str:
+        """The first request, written as soon as the process is there.
+
+        ``initialize`` for a fresh process. On a warm one (``initialized``)
+        the session request, or ``session/prompt`` straight away when the
+        session is already open.
+        """
+        if self.initialized is None:
+            return frame_line(
+                initialize_request(_INITIALIZE_ID, self.client_version, self.client_name)
+            )
+        self._take_initialize(self.initialized)
+        if self.open_session:
+            self._acp_session = self.open_session
+            self.vendor_session = self.report_session or self._acp_session
+            return frame_line(self._prompt_request())
+        request = self._session_request()
+        return frame_line(request) if request is not None else ""
+
+    @property
+    def acp_session(self) -> str:
+        """The ACP session the turn ran in ("" before it opened)."""
+        return self._acp_session
+
+    def cancel_frame(self) -> dict[str, Any] | None:
+        """The ``session/cancel`` notification for the running prompt (``None`` when
+        no prompt is in flight). The agent answers the prompt with
+        ``stopReason: cancelled`` once its turn has wound down."""
+        if not self._acp_session or self.saw_result:
+            return None
+        self._cancel_sent = True
+        return {
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": {"sessionId": self._acp_session},
+        }
+
+    @property
+    def handshaken(self) -> bool:
+        """Whether the session is open (``session/new`` / ``session/load`` answered)."""
+        return bool(self._acp_session)
+
+    def tool_running(self) -> bool:
+        """Whether a tool call started and has not reported its end yet."""
+        return any(call not in self._finished_tools for call in self._tool_started)
+
+    def _session_params(self) -> dict[str, Any]:
+        return session_params(self.cwd, self.mcp_servers, self.session_meta)
+
+    def _take_initialize(self, res: dict[str, Any]) -> None:
+        info = res.get("agentInfo") if isinstance(res.get("agentInfo"), dict) else {}
+        self.agent_name = str(info.get("name") or "")
+        self.agent_version = str(info.get("version") or "")
+        caps = (
+            res.get("agentCapabilities") if isinstance(res.get("agentCapabilities"), dict) else {}
+        )
+        self.can_load = bool(caps.get("loadSession"))
+
+    def _session_request(self) -> dict[str, Any] | None:
+        """``session/load`` or ``session/new``; ``None`` when the turn failed instead."""
+        if self.resume and self.can_load:
+            self._replaying = True
+            params = self._session_params() | {"sessionId": self.resume}
+            return _request(_SESSION_ID, "session/load", params)
+        if self.resume:
+            # The agent cannot reopen conversations: let the runner start
+            # fresh with the transcript in front instead.
+            self._fail(f"{RESUME_LOST_ERROR}: this agent cannot load sessions")
+            return None
+        return _request(_SESSION_ID, "session/new", self._session_params())
+
+    def _prompt_request(self) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "sessionId": self._acp_session,
+            "prompt": [{"type": "text", "text": self.prompt_text}],
+        }
+        if self.prompt_meta:
+            params["_meta"] = dict(self.prompt_meta)
+        return _request(_PROMPT_ID, "session/prompt", params)
+
+    # ---------------------------------------------------------------- dispatch
+
+    async def on_message(self, obj: dict[str, Any], io: AcpIO) -> None:
+        """Handle one JSON object read from the agent's stdout."""
+        method = obj.get("method")
+        if isinstance(method, str):
+            if "id" in obj and obj.get("id") is not None:
+                await self._on_agent_request(obj, method, io)
+            elif method == "session/update":
+                params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+                if not self._replaying:
+                    await self._on_update(params, io)
+            return
+        if "id" in obj:
+            await self._on_response(obj, io)
+
+    async def _on_response(self, obj: dict[str, Any], io: AcpIO) -> None:
+        rid = obj.get("id")
+        error = obj.get("error") if isinstance(obj.get("error"), dict) else None
+        result = obj.get("result")
+        if rid == _INITIALIZE_ID:
+            if error is not None:
+                self._fail(f"ACP initialize failed: {_error_text(error)}")
+                return
+            self._take_initialize(result if isinstance(result, dict) else {})
+            request = self._session_request()
+            if request is not None:
+                await io.write(request)
+            return
+        if rid == _SESSION_ID:
+            self._replaying = False
+            # Hermes answers an unknown id with an empty result ({}), the
+            # spec with null or an error; a real load always describes the
+            # session (models, modes, _meta).
+            if error is not None or (self.resume and not result):
+                if self.resume:
+                    detail = _error_text(error) if error else "unknown id"
+                    self._fail(f"{RESUME_LOST_ERROR}: {detail}")
+                else:
+                    self._fail(f"ACP session/new failed: {_error_text(error or {})}")
+                return
+            res = result if isinstance(result, dict) else {}
+            self._acp_session = str(res.get("sessionId") or self.resume or "")
+            if not self._acp_session:
+                self._fail("ACP session/new returned no session id")
+                return
+            self.vendor_session = self.report_session or self._acp_session
+            await io.write(self._prompt_request())
+            return
+        if rid == _PROMPT_ID:
+            await self._flush_thought(io)
+            await self._flush_text(io)
+            self.saw_result = True
+            if error is not None:
+                self._fail(_error_text(error))
+                return
+            res = result if isinstance(result, dict) else {}
+            self.prompt_answered = True
+            self.stop_reason = str(res.get("stopReason") or "")
+            self._take_usage(res.get("usage"))
+            if self._failure_reply:
+                self._fail(self._failure_reply.strip())
+                return
+            await self._show_lost_final(io)
+            early = _STOPPED_EARLY.get(self.stop_reason, "")
+            if self.stop_reason == "cancelled" and not self._cancel_sent:
+                early = _ENDED_BY_RUNTIME
+            if self.stop_reason == "refusal" and not self.emitted_text:
+                self._fail("The model refused this request.")
+            elif early and not self.emitted_text:
+                self._fail(early)
+            elif early:
+                self._fail(f"{early} ({self.stop_reason})")
+                # Retain the partial answer while reporting that the turn is incomplete.
+                await io.emit(
+                    make_event(
+                        "notice",
+                        {
+                            "kind": "stop_reason",
+                            "turn_id": self.turn_id,
+                            "stop_reason": self.stop_reason,
+                            "text": early,
+                        },
+                    )
+                )
+            return
+
+    async def cancel(self, io: AcpIO) -> None:
+        """Abort the upstream session before its stdio bridge is terminated."""
+        if self._acp_session and not self.saw_result:
+            self._cancel_sent = True
+            await io.write({
+                "jsonrpc": "2.0", "method": "session/cancel",
+                "params": {"sessionId": self._acp_session},
+            })
+
+    async def _on_agent_request(self, obj: dict[str, Any], method: str, io: AcpIO) -> None:
+        rid = obj.get("id")
+        params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+        if method == "session/request_permission":
+            outcome = await self._permission(params, io)
+            await io.write({"jsonrpc": "2.0", "id": rid, "result": {"outcome": outcome}})
+            return
+        # fs/*, terminal/* and anything newer: not offered in initialize.
+        await io.write(
+            {
+                "jsonrpc": "2.0",
+                "id": rid,
+                "error": {"code": _METHOD_NOT_FOUND, "message": f"{method} is not supported"},
+            }
+        )
+
+    async def _permission(self, params: dict[str, Any], io: AcpIO) -> dict[str, Any]:
+        options = [o for o in params.get("options") or [] if isinstance(o, dict)]
+        by_kind: dict[str, str] = {}
+        for option in options:
+            kind = str(option.get("kind") or "")
+            if kind and kind not in by_kind:
+                by_kind[kind] = str(option.get("optionId") or "")
+        call = params.get("toolCall") if isinstance(params.get("toolCall"), dict) else {}
+        call_id = str(call.get("toolCallId") or uuid.uuid4().hex)
+        if call_id not in self.emitted_tool_ids and not (self.auto_allow or self.auto_deny):
+            # The approval card sits on a tool row; give it one.
+            await self._flush_text(io)
+            await self._tool_start(call | {"toolCallId": call_id}, io)
+        name = self._tool_names.get(call_id) or _tool_name(call)
+        args = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
+        summary = str(call.get("title") or name)[:200]
+        if self.auto_deny:
+            decision = "deny"
+        elif self.auto_allow:
+            decision = "allow"
+        else:
+            await self._flush_text(io)
+            decision = await io.ask(call_id, name, args, summary)
+            if decision == "allow_always" and self.always_ask:
+                decision = "allow"
+        wanted: tuple[str, ...]
+        if decision == "allow_always":
+            wanted = ("allow_always", "allow_once")
+        elif decision == "allow":
+            wanted = ("allow_once", "allow_always")
+        elif decision == "deny":
+            wanted = ("reject_once", "reject_always")
+        else:
+            return {"outcome": "cancelled"}
+        for kind in wanted:
+            if by_kind.get(kind):
+                return {"outcome": "selected", "optionId": by_kind[kind]}
+        return {"outcome": "cancelled"}
+
+    async def native_permission(
+        self,
+        io: AcpIO,
+        call_id: str,
+        name: str,
+        args: dict[str, Any],
+        title: str = "",
+        *,
+        read_only: bool = False,
+    ) -> str:
+        """Decide one native tool call the runtime cannot ask about itself.
+
+        OpenClaw relays only exec approvals over ACP; its file tools (write,
+        edit, apply_patch) are asked about here instead, by Dodaios' gate
+        plugin in the Gateway (``openclaw_gate``). The chat's stance decides
+        as for ``session/request_permission``: Bypass allows, Plan refuses,
+        anything else shows the approval card on the tool's row. A reading
+        tool (``read_only``) runs freely, also in Plan, and asks in "Always
+        ask" only. Returns ``allow`` / ``allow_always`` / ``deny`` / ``cancel``.
+        """
+        if read_only and (self.auto_allow or not self.always_ask):
+            return "allow"
+        if self.auto_deny:
+            return "deny"
+        if self.auto_allow:
+            return "allow"
+        if name in self.native_always and not self.always_ask:
+            return "allow"
+        call_id = call_id or uuid.uuid4().hex
+        await self._flush_text(io)
+        if call_id not in self.emitted_tool_ids:
+            # The approval card sits on a tool row; give it one.
+            await self._tool_start(
+                {"toolCallId": call_id, "title": title or name, "rawInput": args,
+                 "_meta": {"toolName": name}},
+                io,
+            )
+        summary = str(title or name)[:200]
+        decision = await io.ask(call_id, self._tool_names.get(call_id) or name, args, summary)
+        if decision == "allow_always":
+            if self.always_ask:
+                return "allow"
+            self.native_always.add(name)
+        return decision
+
+    # ----------------------------------------------------------------- updates
+
+    async def _on_update(self, params: dict[str, Any], io: AcpIO) -> None:
+        update = params.get("update") if isinstance(params.get("update"), dict) else {}
+        kind = str(update.get("sessionUpdate") or "")
+        if kind == "agent_message_chunk":
+            await self._flush_thought(io)
+            text = _content_text(update.get("content"))
+            if self._failure_reply:
+                # The rest of a failure notice that arrived in several chunks.
+                self._failure_reply += text
+                return
+            reason = _failure_reason(text, self.failure_replies)
+            if reason:
+                # The runtime's own failure notice, not the model's answer.
+                self._failure_reply = reason
+                return
+            if text:
+                if not self._text_id:
+                    self._text_id = f"acp-{self.turn_id}-{uuid.uuid4().hex[:8]}"
+                self._text_parts.append(text)
+                await io.emit(
+                    make_event(
+                        "text_delta",
+                        {"turn_id": self.turn_id, "message_id": self._text_id, "text": text},
+                    )
+                )
+            return
+        if kind == "agent_thought_chunk":
+            text = _content_text(update.get("content"))
+            if text:
+                if self._thought_started is None:
+                    self._thought_started = time.perf_counter()
+                    await io.emit(
+                        make_event(
+                            "reasoning_started",
+                            {"turn_id": self.turn_id, "message_id": f"think-{self.turn_id}"},
+                        )
+                    )
+                self._thought_parts.append(text)
+                await io.emit(
+                    make_event("reasoning_delta", {"turn_id": self.turn_id, "text": text})
+                )
+            return
+        if kind == "tool_call":
+            await self._flush_thought(io)
+            await self._flush_text(io)
+            await self._tool_start(update, io)
+            await self._tool_finish_if_done(update, io)
+            return
+        if kind == "tool_call_update":
+            call_id = str(update.get("toolCallId") or "")
+            if call_id and call_id not in self.emitted_tool_ids:
+                await self._flush_text(io)
+                await self._tool_start(update, io)
+            await self._tool_finish_if_done(update, io)
+            return
+        if kind == "usage_update":
+            self._take_usage(update)
+            if self.usage:
+                await io.emit(
+                    make_event("usage_delta", {"turn_id": self.turn_id, "usage": dict(self.usage)})
+                )
+            return
+        # plan, available_commands_update, current_mode_update,
+        # session_info_update, user_message_chunk: nothing the timeline shows.
+
+    async def _tool_start(self, update: dict[str, Any], io: AcpIO) -> None:
+        call_id = str(update.get("toolCallId") or uuid.uuid4().hex)
+        if call_id in self.emitted_tool_ids:
+            return
+        name = normalize_tool_name(_tool_name(update))
+        args = update.get("rawInput") if isinstance(update.get("rawInput"), dict) else {}
+        if not args and (path := _location_path(update)):
+            # Hermes sends no input for its own file tools, only where they act.
+            args = {"path": path}
+        self.emitted_tool_ids.add(call_id)
+        self._text_since_tool = False
+        self._tool_names[call_id] = name
+        self._tool_started[call_id] = time.perf_counter()
+        await io.emit(
+            make_event(
+                "tool_call",
+                {
+                    "turn_id": self.turn_id,
+                    "call_id": call_id,
+                    "name": name,
+                    "input": args,
+                    "summary": str(update.get("title") or name)[:200],
+                },
+            )
+        )
+
+    async def _tool_finish_if_done(self, update: dict[str, Any], io: AcpIO) -> None:
+        call_id = str(update.get("toolCallId") or "")
+        status = str(update.get("status") or "")
+        if status not in {"completed", "failed"} or call_id in self._finished_tools:
+            return
+        self._finished_tools.add(call_id)
+        output = _content_text(update.get("content"))
+        raw = update.get("rawOutput")
+        if not output and raw is not None:
+            output = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+        is_error = status == "failed"
+        started = self._tool_started.get(call_id)
+        await io.emit(
+            make_event(
+                "tool_result",
+                {
+                    "turn_id": self.turn_id,
+                    "call_id": call_id,
+                    "output": (output or ("failed" if is_error else "done"))[:20_000],
+                    "is_error": is_error,
+                    "duration_ms": int((time.perf_counter() - started) * 1000)
+                    if started
+                    else None,
+                },
+            )
+        )
+
+    async def _flush_text(self, io: AcpIO) -> None:
+        text = "".join(self._text_parts)
+        message_id = self._text_id
+        self._text_parts.clear()
+        self._text_id = ""
+        if not text.strip():
+            return
+        text = self._repaired(text)
+        self.emitted_text = True
+        self._text_since_tool = True
+        self.result_text = text
+        await io.emit(
+            make_event(
+                "assistant_text",
+                {"turn_id": self.turn_id, "message_id": message_id, "text": text},
+            )
+        )
+
+    def _replies(self) -> list[tuple[str, int]]:
+        if self.reply_texts is None:
+            return []
+        try:
+            return list(self.reply_texts())
+        except Exception:  # noqa: BLE001 — a repair never decides more than the shown text
+            log.debug("acp: model replies unreadable", exc_info=True)
+            return []
+
+    def _repaired(self, streamed: str) -> str:
+        """``streamed`` with a start the runtime's stream cut off put back.
+
+        OpenClaw's bridge sends each message of a turn as the part beyond the
+        length of the text it sent before, so a later message (after a tool
+        call, or its own "isolated finalization" pass) arrives without its
+        first characters. The model gateway saw the whole answer: a streamed
+        text that is the end of a longer answer of this turn is that answer.
+        """
+        shown = streamed.strip()
+        for text, _calls in reversed(self._replies()):
+            whole = text.strip()
+            if whole == shown:
+                return streamed
+            if len(whole) > len(shown) and whole.endswith(shown):
+                return whole
+        return streamed
+
+    async def _show_lost_final(self, io: AcpIO) -> None:
+        """The turn's final answer when the runtime's stream dropped it whole.
+
+        A final message no longer than the text streamed before it arrives as
+        nothing at all (the same offset fault as :meth:`_repaired`). When the
+        turn's last answer came after the last tool call and nothing was shown
+        since, it is shown here.
+        """
+        if self._text_since_tool or not self.emitted_tool_ids:
+            return
+        final = ""
+        for text, calls in reversed(self._replies()):
+            if calls:
+                return  # the last model call asked for a tool: no answer followed
+            if text.strip():
+                final = text.strip()
+                break
+        if not final or _SILENT_REPLY.match(final):
+            return
+        message_id = f"acp-{self.turn_id}-{uuid.uuid4().hex[:8]}"
+        self.emitted_text = True
+        self._text_since_tool = True
+        self.result_text = final
+        await io.emit(
+            make_event(
+                "assistant_text",
+                {"turn_id": self.turn_id, "message_id": message_id, "text": final},
+            )
+        )
+
+    async def _flush_thought(self, io: AcpIO) -> None:
+        if self._thought_started is None:
+            return
+        text = "".join(self._thought_parts)
+        duration = int((time.perf_counter() - self._thought_started) * 1000)
+        self._thought_parts.clear()
+        self._thought_started = None
+        await io.emit(
+            make_event(
+                "reasoning",
+                {
+                    "turn_id": self.turn_id,
+                    "message_id": f"think-{self.turn_id}",
+                    "text": text,
+                    "duration_ms": duration,
+                },
+            )
+        )
+
+    def _take_usage(self, raw: Any) -> None:
+        """Read ACP usage (``usage_update`` or the prompt response's ``usage``)."""
+        if not isinstance(raw, dict):
+            return
+        for theirs, ours in (
+            ("inputTokens", "input_tokens"),
+            ("outputTokens", "output_tokens"),
+            ("cachedReadTokens", "cached_input_tokens"),
+            ("cachedWriteTokens", "cache_write_input_tokens"),
+            ("thoughtTokens", "reasoning_output_tokens"),
+        ):
+            value = raw.get(theirs)
+            if isinstance(value, int | float):
+                self.usage[ours] = int(value)
+        cost = raw.get("cost")
+        if isinstance(cost, dict):
+            amount = cost.get("amount")
+            if isinstance(amount, int | float) and str(cost.get("currency") or "USD") == "USD":
+                self.cost_usd = float(amount)
+
+    def _fail(self, message: str) -> None:
+        self.status = "error"
+        self.error = message
+        self.saw_result = True
+
+
+def _tool_name(update: dict[str, Any]) -> str:
+    """Best tool name an ACP tool call carries.
+
+    ACP has no tool-name field; agents put it in ``_meta`` or use it as the
+    ``title`` for tools they do not render specially (Hermes does both for
+    MCP tools). A descriptive title falls back to the tool ``kind``.
+    """
+    meta = update.get("_meta") if isinstance(update.get("_meta"), dict) else {}
+    for key in ("toolName", "tool_name", "name"):
+        value = meta.get(key)
+        if isinstance(value, str) and value:
+            return value
+    title = str(update.get("title") or "").strip()
+    if title and _IDENTIFIER.match(title):
+        return title
+    if title:
+        head = title.split("(", 1)[0].split(":", 1)[0].strip()
+        if head and _IDENTIFIER.match(head):
+            return head
+    return str(update.get("kind") or "tool")
+
+
+def _location_path(update: dict[str, Any]) -> str:
+    """The first file a tool call says it acts on (ACP ``locations``), or ""."""
+    locations = update.get("locations")
+    if not isinstance(locations, list):
+        return ""
+    for location in locations:
+        path = location.get("path") if isinstance(location, dict) else None
+        if isinstance(path, str) and path:
+            return path
+    return ""
+
+
+def _failure_reason(text: str, patterns: tuple[re.Pattern[str], ...]) -> str:
+    """The reason in ``text`` when it is one of the runtime's failure replies ("" otherwise)."""
+    stripped = text.strip()
+    for pattern in patterns:
+        match = pattern.match(stripped)
+        if match:
+            return (match.group(1) if match.groups() else stripped).strip()
+    return ""
+
+
+def _error_text(error: dict[str, Any]) -> str:
+    message = str(error.get("message") or "error")
+    data = error.get("data")
+    if isinstance(data, dict):
+        # Hermes' ACP SDK nests this local configuration failure under
+        # details. Translate only the known numeric contract; never expose
+        # arbitrary upstream details (which may contain provider bodies).
+        detail = str(data.get("details") or "")
+        bounds = re.search(
+            r"context window of ([\d,]+) tokens, which is below the minimum "
+            r"([\d,]+) required by Hermes Agent\.", detail,
+        )
+        if bounds:
+            actual, minimum = bounds.groups()
+            return (
+                f"Hermes requires at least {minimum} context tokens; this model has {actual}. "
+                "Increase the model context in Settings or choose a model with a larger window."
+            )
+        # A Gateway UNAVAILABLE reply behind the SDK's generic wrapper: the
+        # known conditions as a reason, never the reply itself.
+        if known := gateway_unavailable_reason(detail):
+            return known
+    if isinstance(data, str) and data:
+        return gateway_unavailable_reason(data) or f"{message}: {data}"
+    if isinstance(data, dict) and data.get("message"):
+        return f"{message}: {data['message']}"
+    return message
+
+
+def _request(rid: int, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": rid, "method": method, "params": params}
+
+
+def initialize_request(
+    rid: int | str, client_version: str = "", client_name: str = "dodaios"
+) -> dict[str, Any]:
+    """The ``initialize`` request (protocol version + client capabilities)."""
+    return {
+        "jsonrpc": "2.0",
+        "id": rid,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": PROTOCOL_VERSION,
+            # No fs / terminal capability: the agent uses its own tools in its
+            # own working folder; Dodaios is not an editor.
+            "clientCapabilities": {
+                "fs": {"readTextFile": False, "writeTextFile": False},
+                "terminal": False,
+            },
+            "clientInfo": {"name": client_name, "version": client_version or "0"},
+        },
+    }
+
+
+def session_params(
+    cwd: str, mcp_servers: list[McpServer], meta: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """``session/new`` / ``session/load`` parameters."""
+    params: dict[str, Any] = {"cwd": cwd, "mcpServers": [s.to_acp() for s in mcp_servers]}
+    if meta:
+        params["_meta"] = dict(meta)
+    return params
+
+
+def frame_line(frame: dict[str, Any]) -> str:
+    """One frame as the newline-terminated JSON line ACP expects on stdin."""
+    return json.dumps(frame, ensure_ascii=False) + "\n"

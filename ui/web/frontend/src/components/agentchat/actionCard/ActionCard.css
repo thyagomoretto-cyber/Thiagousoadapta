@@ -1,0 +1,311 @@
+/* The action card (ActionCard.tsx). Built from the theme's own tokens only:
+   surfaces from the ladder, ink from the four ink steps, status from the
+   semantic set. No literal colour, no surface token with opacity. */
+
+.action-card-wrap {
+  width: 100%;
+  max-width: 42rem;
+  min-width: 0;
+}
+
+.action-card {
+  position: relative;
+  border-radius: 20px;
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  padding: 14px 16px 14px;
+  box-shadow:
+    0 0 0 1px hsl(var(--border) / 0.6),
+    0 1px 2px rgb(var(--scrim-rgb) / 0.06),
+    0 10px 28px -14px rgb(var(--scrim-rgb) / 0.28);
+  animation: action-card-in 160ms ease-out;
+}
+
+.action-card-tile {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground-secondary));
+}
+.action-card-tile svg {
+  width: 13px;
+  height: 13px;
+}
+.action-card-tile .tool-choice-icon svg,
+.action-card-tile .tool-choice-icon img {
+  width: 14px;
+  height: 14px;
+}
+.action-card-tile-sm {
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+}
+.action-card-tile-sm svg {
+  width: 12px;
+  height: 12px;
+}
+
+.action-card-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+.action-card-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--background)), 0 0 0 4px hsl(var(--ring));
+}
+.action-card-button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.action-card-button[data-tone="primary"] {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.action-card-button[data-tone="primary"]:not(:disabled):hover {
+  opacity: 0.88;
+}
+.action-card-button[data-tone="secondary"] {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+.action-card-button[data-tone="secondary"]:not(:disabled):hover {
+  background: hsl(var(--surface-raised));
+}
+.action-card-button:not(:disabled):active { transform: scale(0.97); }
+.action-card-button[data-tone="tertiary"] {
+  color: hsl(var(--muted-foreground));
+  padding: 0 10px;
+}
+.action-card-button[data-tone="tertiary"]:not(:disabled):hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+.action-card-button-compact {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.action-card-code {
+  position: relative;
+  margin-top: 6px;
+  border-radius: 14px;
+  background: hsl(var(--secondary) / 0.7);
+  color: hsl(var(--foreground));
+}
+.action-card-code pre {
+  margin: 0;
+  max-height: 14rem;
+  overflow: auto;
+  padding: 10px 40px 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* A request read as label/value lines; the raw text waits behind a quiet toggle. */
+.action-card-fields { margin-top: 6px; }
+.action-card-rows {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 14px;
+  background: hsl(var(--secondary) / 0.7);
+  padding: 8px 12px;
+}
+.action-card-row {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 34%) minmax(0, 1fr);
+  gap: 12px;
+  padding: 2px 0;
+  font-size: 13px;
+  line-height: 19px;
+}
+.action-card-row dt { color: hsl(var(--muted-foreground)); overflow-wrap: anywhere; }
+.action-card-row dd { margin: 0; color: hsl(var(--foreground)); overflow-wrap: anywhere; white-space: pre-wrap; }
+.action-card-raw-toggle {
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 999px;
+  padding: 2px 8px 2px 4px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.action-card-raw-toggle:hover { color: hsl(var(--foreground)); background: hsl(var(--secondary) / 0.7); }
+.action-card-raw-toggle:focus-visible { outline: none; box-shadow: 0 0 0 2px hsl(var(--ring)); }
+.action-card-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: hsl(var(--muted-foreground));
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.action-card-copy:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+.action-card-copy:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.action-card-caution {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 4px 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: hsl(var(--warning));
+}
+.action-card-caution svg {
+  margin-top: 2px;
+}
+
+.action-card-settled {
+  border-radius: 16px;
+  background: hsl(var(--secondary) / 0.5);
+  padding: 8px 12px;
+}
+.action-card-settled-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 0 0 2px 26px;
+}
+
+.action-card-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground));
+}
+.action-card-dot[data-tone="success"] {
+  background: hsl(var(--success));
+}
+.action-card-dot[data-tone="danger"] {
+  background: hsl(var(--destructive));
+}
+.action-card-dot[data-tone="warning"] {
+  background: hsl(var(--warning));
+}
+
+.action-card-receipt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+}
+.action-card-receipt svg {
+  width: 12px;
+  height: 12px;
+  color: hsl(var(--success));
+}
+
+/* The rule chooser inside an open card. */
+.action-card-rule {
+  border-radius: 16px;
+  background: hsl(var(--secondary));
+  padding: 10px 12px;
+}
+.action-card-segments {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: hsl(var(--background) / 0.7);
+}
+.action-card-segment {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.action-card-segment:hover {
+  color: hsl(var(--foreground));
+}
+.action-card-segment[aria-checked="true"] {
+  background: hsl(var(--card));
+  box-shadow: 0 1px 2px rgb(var(--scrim-rgb) / 0.12), inset 0 0 0 1px hsl(var(--border) / 0.6);
+  color: hsl(var(--foreground-strong));
+  font-weight: 500;
+}
+.action-card-segment:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.action-card-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: hsl(var(--muted-foreground));
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.action-card-dismiss:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+.action-card-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+.action-card-dismiss:disabled {
+  opacity: 0.5;
+}
+
+@keyframes action-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .action-card {
+    animation: none;
+  }
+  .action-card-wrap *,
+  .action-card-wrap *::before {
+    transition: none !important;
+  }
+}

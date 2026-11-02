@@ -1,0 +1,940 @@
+/*
+ * The Agents section's own design tokens and furniture.
+ *
+ * Everything here is built from the theme tokens in `index.css` (the HSL
+ * roles and the `*-rgb` channel triples). No literal colour is decided in
+ * this file: the chrome stays neutral in both themes, and the only
+ * decorative hue is `--agent-tint`, the colour a person already knows an
+ * agent by (set inline by `agentTint()`), mixed into a token with
+ * `color-mix` so it leans on a surface instead of replacing it.
+ *
+ * Tokens are scoped to `.agent-section` so nothing leaks into the rest of the
+ * app. Dark is the product default; light uses the same rules.
+ *
+ * The section is deliberately quiet: round buttons and pills, soft rounded
+ * rows instead of boxes and rules, 14px primary and 13px secondary text
+ * (nothing below 12px), and icons only where a word would be worse.
+ */
+
+.agent-section {
+  /* Radius ladder: controls, rows, cards and menus, bubbles, composer, sheets. */
+  --as-radius-xs: 6px;
+  --as-radius-sm: 10px;
+  --as-radius-md: 12px;
+  --as-radius-lg: 18px;
+  --as-radius-xl: 20px;
+  --as-radius-2xl: 24px;
+
+  /* Two-part shadows: an ambient plus a key shadow, both low opacity. */
+  --as-shadow-control: 0 0 0 1px rgb(var(--scrim-rgb) / 0.03), 0 1px 1px rgb(var(--scrim-rgb) / 0.05);
+  --as-shadow-card: 0 1px 2px rgb(var(--scrim-rgb) / 0.06), 0 4px 14px rgb(var(--scrim-rgb) / 0.05);
+  --as-shadow-pop: 0 2px 6px rgb(var(--scrim-rgb) / 0.1), 0 14px 36px rgb(var(--scrim-rgb) / 0.14);
+  --as-sheen-edge: inset 0 1px 0 rgb(var(--sheen-rgb) / 0.04);
+
+  /* Motion: short durations and one stiff, non-bouncing layout curve. */
+  --as-dur-1: 100ms;
+  --as-dur-2: 150ms;
+  --as-dur-3: 200ms;
+  --as-dur-4: 300ms;
+  --as-ease: cubic-bezier(0.2, 0, 0, 1);
+  --as-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --as-spring: cubic-bezier(0.25, 1, 0.5, 1);
+
+  /* The tint falls back to ink when an element has no agent. */
+  --as-tint: var(--agent-tint, hsl(var(--foreground)));
+  --as-tint-wash: color-mix(in srgb, var(--as-tint) 9%, hsl(var(--secondary)));
+  --as-tint-ink: color-mix(in srgb, var(--as-tint) 62%, hsl(var(--foreground)));
+
+  /* Hover-only affordances read this (0 hidden, 1 shown). */
+  --as-reveal: 0;
+}
+
+.dark .agent-section {
+  --as-shadow-control: 0 0 0 1px rgb(var(--scrim-rgb) / 0.3), 0 1px 1px rgb(var(--scrim-rgb) / 0.35);
+  --as-shadow-card: 0 1px 2px rgb(var(--scrim-rgb) / 0.35), 0 6px 18px rgb(var(--scrim-rgb) / 0.3);
+  --as-shadow-pop: 0 2px 8px rgb(var(--scrim-rgb) / 0.4), 0 18px 44px rgb(var(--scrim-rgb) / 0.5);
+  --as-sheen-edge: inset 0 1px 0 rgb(var(--sheen-rgb) / 0.05);
+  --as-tint-wash: color-mix(in srgb, var(--as-tint) 12%, hsl(var(--secondary)));
+  --as-tint-ink: color-mix(in srgb, var(--as-tint) 72%, hsl(var(--foreground)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-section {
+    --as-dur-1: 0ms;
+    --as-dur-2: 0ms;
+    --as-dur-3: 0ms;
+    --as-dur-4: 0ms;
+  }
+}
+
+/* --- reveal: hover-only affordances, always visible without a hover pointer */
+
+.as-reveal-host:hover,
+.as-reveal-host:focus-within,
+.as-reveal-host[data-menu-open="true"] {
+  --as-reveal: 1;
+}
+
+.as-reveal {
+  opacity: var(--as-reveal);
+  transition: opacity var(--as-dur-2) var(--as-ease);
+}
+
+@media (hover: none) {
+  .agent-section,
+  .as-reveal-host {
+    --as-reveal: 1;
+  }
+}
+
+/* --- the three-region frame ---------------------------------------------- */
+
+.as-shell {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  min-width: 0;
+  flex: 1;
+  grid-template-rows: minmax(0, 1fr);
+  transition: grid-template-columns var(--as-dur-3) var(--as-spring);
+}
+
+.as-shell[data-resizing="true"] {
+  transition: none;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.as-region {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.as-stage {
+  background: hsl(var(--background));
+}
+
+/* The pane's content draws its own edge (the details rail has a left border). */
+.as-pane {
+  background: hsl(var(--sidebar));
+}
+
+.as-pane[hidden] {
+  display: none;
+}
+
+/* A pane the window had to close comes back as a sheet over the chat. */
+.as-pane[data-overlay="true"] {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 30;
+  box-shadow: var(--as-shadow-pop);
+  animation: as-sheet-in var(--as-dur-3) var(--as-ease-out);
+}
+
+.as-roster-overlay {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  box-shadow: var(--as-shadow-pop);
+  animation: as-sheet-in-left var(--as-dur-3) var(--as-ease-out);
+}
+
+@keyframes as-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@keyframes as-sheet-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+
+/* The drag handle sits on a column edge: a wide hit zone, a hairline that
+   only shows while hovered or dragged. */
+.as-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 9px;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.as-resizer[data-edge="right"] {
+  right: -5px;
+}
+
+.as-resizer[data-edge="left"] {
+  left: -5px;
+}
+
+.as-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: hsl(var(--border-strong));
+  opacity: 0;
+  transition: opacity var(--as-dur-2) var(--as-ease);
+}
+
+.as-resizer:hover::after,
+.as-resizer:focus-visible::after,
+.as-resizer[data-active="true"]::after {
+  opacity: 1;
+}
+
+.as-resizer:focus-visible {
+  outline: none;
+}
+
+/* --- round buttons ---------------------------------------------------------- */
+
+/* Every icon button in the section is a circle on a soft lift: search, "+",
+   send, mic, the row's "…". Pressing it dips a little. */
+.as-round-button {
+  display: inline-flex;
+  height: 34px;
+  width: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--muted-foreground));
+  /* A hairline keeps the circle visible where the lift and the rail are close (light). */
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.5);
+  transition:
+    background-color var(--as-dur-2) var(--as-ease),
+    color var(--as-dur-2) var(--as-ease),
+    opacity var(--as-dur-2) var(--as-ease),
+    transform var(--as-dur-1) var(--as-ease);
+}
+
+.as-round-button[data-size="sm"] {
+  height: 28px;
+  width: 28px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.as-round-button:hover:not(:disabled),
+.as-round-button[aria-expanded="true"],
+.as-round-button[aria-pressed="true"] {
+  background: hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+
+.as-round-button:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.as-round-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.as-round-button:disabled {
+  opacity: 0.4;
+}
+
+.as-round-button[data-tone="ink"] {
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+}
+
+.as-round-button[data-tone="send"] {
+  background: hsl(var(--chat-send-background));
+  color: hsl(var(--chat-send-foreground));
+  box-shadow: var(--as-shadow-control);
+}
+
+.as-round-button[data-tone="send"]:disabled {
+  opacity: 1;
+}
+
+.as-round-button[data-tone="send"]:disabled svg {
+  opacity: 0.4;
+}
+
+/* A text button, fully round. The base weighs only as much as an element
+   selector (it still beats the reset's `button`, which loads first), so a
+   utility class on a pill (bg-transparent, font-normal, h-8 …) wins whatever
+   order the stylesheets load in; otherwise "quiet" pills rendered filled and
+   bold. */
+button:where(.as-pill-button) {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 500;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+  transition:
+    background-color var(--as-dur-2) var(--as-ease),
+    transform var(--as-dur-1) var(--as-ease);
+}
+
+.as-pill-button:hover:not(:disabled) {
+  background: hsl(var(--border));
+}
+
+.as-pill-button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.as-pill-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.as-pill-button[data-tone="ink"] {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+.as-pill-button[data-tone="ink"]:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.as-quiet-link {
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+  transition: background-color var(--as-dur-2) var(--as-ease), color var(--as-dur-2) var(--as-ease);
+}
+
+.as-quiet-link:hover {
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+}
+
+/* A row of chips that may overflow: centred while it fits, scrolling from the
+   first chip (never clipped at the start) when it does not, with soft edges. */
+.as-chip-strip {
+  justify-content: safe center;
+  /* A mask reads only alpha: any opaque token works. */
+  mask-image: linear-gradient(90deg, transparent 0, hsl(var(--foreground)) 16px, hsl(var(--foreground)) calc(100% - 16px), transparent 100%);
+}
+
+/* --- the chat header ------------------------------------------------------ */
+
+/* Nearly nothing: the agent's face and name as one small pill in the middle. */
+.as-header {
+  display: flex;
+  height: 56px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  background: transparent;
+}
+
+.as-name-pill {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(100%, 480px);
+  height: 38px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 0 14px 0 7px;
+  background: hsl(var(--secondary) / 0.7);
+  color: hsl(var(--foreground));
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.6);
+  transition:
+    background-color var(--as-dur-2) var(--as-ease),
+    transform var(--as-dur-1) var(--as-ease);
+}
+
+button.as-name-pill:hover,
+button.as-name-pill[aria-expanded="true"] {
+  background: hsl(var(--secondary));
+}
+
+button.as-name-pill:active {
+  transform: scale(0.98);
+}
+
+button.as-name-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.as-name-pill .as-status {
+  background: hsl(var(--secondary));
+}
+
+.as-pill-name {
+  min-width: 0;
+  max-width: 260px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: hsl(var(--foreground-strong));
+}
+
+.as-pill-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+}
+
+/* --- menus and popovers ---------------------------------------------------- */
+
+.as-menu {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--as-radius-lg);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: var(--as-shadow-pop), var(--as-sheen-edge);
+  padding: 6px;
+  transform-origin: top;
+  animation: as-pop-in var(--as-dur-2) var(--as-ease-out);
+}
+
+/* A plain text row in a menu; an optional value sits muted on the right. */
+.as-menu-row {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--as-radius-md);
+  padding: 7px 12px;
+  text-align: left;
+  font-size: 14px;
+  color: hsl(var(--foreground));
+  transition: background-color var(--as-dur-1) var(--as-ease);
+}
+
+.as-menu-row:hover:not(:disabled),
+.as-menu-row:focus-visible {
+  background: hsl(var(--secondary));
+  outline: none;
+}
+
+.as-menu-row-value {
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: hsl(var(--muted-foreground));
+}
+
+.as-menu-item {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: flex-start;
+  gap: 10px;
+  border-radius: var(--as-radius-md);
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.as-menu-item:hover:not(:disabled),
+.as-menu-item:focus-visible {
+  background: hsl(var(--secondary));
+  outline: none;
+}
+
+.as-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@keyframes as-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* --- live status text ------------------------------------------------------ */
+
+.as-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    hsl(var(--muted-foreground)) 0%,
+    hsl(var(--muted-foreground)) 35%,
+    hsl(var(--foreground-strong)) 50%,
+    hsl(var(--muted-foreground)) 65%,
+    hsl(var(--muted-foreground)) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: as-shimmer 2.2s linear infinite;
+}
+
+@keyframes as-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-shimmer {
+    animation: none;
+    background-image: none;
+    color: hsl(var(--muted-foreground));
+  }
+}
+
+/* --- segmented words (the lead's Voice | Chat) ------------------------------ */
+
+.as-seg-pills {
+  display: inline-flex;
+  gap: 2px;
+  border-radius: 999px;
+  padding: 3px;
+  background: hsl(var(--secondary));
+}
+
+.as-seg-pill {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: hsl(var(--muted-foreground));
+  transition:
+    background-color var(--as-dur-2) var(--as-ease),
+    color var(--as-dur-2) var(--as-ease);
+}
+
+.as-seg-pill:hover {
+  color: hsl(var(--foreground));
+}
+
+.as-seg-pill[aria-selected="true"],
+.as-seg-pill-on {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground-strong));
+  box-shadow: var(--as-shadow-control);
+}
+
+.as-seg-pill:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+/* --- the composer ------------------------------------------------------------ */
+
+/* One rounded pill: "+", the field, mic and send. */
+.as-composer {
+  min-height: 52px;
+  border-radius: 26px;
+  padding: 8px;
+  background: hsl(var(--card));
+  box-shadow: inset 0 0 0 1px hsl(var(--border)), var(--as-shadow-card);
+  transition: box-shadow var(--as-dur-2) var(--as-ease);
+}
+
+.as-composer:focus-within {
+  box-shadow: inset 0 0 0 1px hsl(var(--border-strong)), var(--as-shadow-card);
+}
+
+/* --- roster ---------------------------------------------------------------- */
+
+.as-roster {
+  background: hsl(var(--sidebar));
+}
+
+.as-roster-top {
+  display: flex;
+  height: 58px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 14px;
+}
+
+.as-search {
+  height: 38px;
+  width: 100%;
+  border-radius: 999px;
+  border: 0;
+  padding: 0 16px;
+  font-size: 14px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--foreground));
+  animation: as-pop-in var(--as-dur-2) var(--as-ease-out);
+}
+
+.as-search::placeholder {
+  color: hsl(var(--muted-foreground));
+}
+
+.as-search:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px hsl(var(--ring) / 0.5);
+}
+
+/* The lead, large and centred above the list, like a contact header: a face
+   and a name, no box. Hover and selection only touch a soft circle behind the
+   face. */
+.as-hero {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--as-radius-lg);
+  padding: 4px 12px;
+  transition: transform var(--as-dur-1) var(--as-ease);
+}
+
+.as-hero:active {
+  transform: scale(0.97);
+}
+
+.as-hero:focus-visible {
+  outline: none;
+}
+
+.as-hero-face {
+  display: grid;
+  width: 80px;
+  height: 80px;
+  place-items: center;
+  border-radius: 999px;
+  transition:
+    background-color var(--as-dur-2) var(--as-ease),
+    box-shadow var(--as-dur-2) var(--as-ease);
+}
+
+.as-hero:hover .as-hero-face {
+  background: hsl(var(--secondary) / 0.6);
+}
+
+.as-hero[data-active="true"] .as-hero-face {
+  background: var(--as-tint-wash);
+}
+
+.as-hero:focus-visible .as-hero-face {
+  box-shadow: 0 0 0 2px hsl(var(--ring));
+}
+
+.as-hero .as-status {
+  right: 8px;
+  bottom: 8px;
+}
+
+.as-hero .as-shortcut-badge {
+  left: 6px;
+  top: 6px;
+}
+
+.as-hero-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.as-hero[data-active="true"] .as-hero-name {
+  color: hsl(var(--foreground-strong));
+}
+
+.as-row {
+  position: relative;
+  display: flex;
+  height: 60px;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  border-radius: var(--as-radius-lg);
+  padding: 0 10px;
+  text-align: left;
+  transition: background-color var(--as-dur-2) var(--as-ease);
+}
+
+.as-row:hover {
+  background: hsl(var(--secondary) / 0.6);
+}
+
+.as-row[data-active="true"] {
+  background: hsl(var(--secondary));
+  /* In light the lift and the rail are close: a hairline keeps the selection readable. */
+  box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.6);
+}
+
+.as-row[data-dragging="true"] {
+  opacity: 0.4;
+}
+
+.as-row[data-drop="true"] {
+  background: hsl(var(--secondary));
+  box-shadow: inset 0 0 0 1px hsl(var(--border-strong));
+}
+
+.as-row[data-group-ready="true"] {
+  box-shadow: inset 0 0 0 2px hsl(var(--primary));
+}
+
+.as-row-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  line-height: 19px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+
+.as-row-preview {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 18px;
+  color: hsl(var(--muted-foreground));
+}
+
+.as-row-preview[data-kind="waiting"] {
+  color: hsl(var(--warning));
+}
+
+.as-preview-tag {
+  font-weight: 500;
+  color: var(--as-tint-ink);
+}
+
+.as-row-preview[data-kind="waiting"] .as-preview-tag {
+  color: inherit;
+}
+
+/* The drop line between rows while reordering. */
+.as-drop-line {
+  pointer-events: none;
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  z-index: 10;
+  height: 2px;
+  border-radius: 999px;
+  background: hsl(var(--accent));
+}
+
+/* --- the avatar and its corner mark ---------------------------------------- */
+
+.as-avatar {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* A mark only when it says something: working, unread, waiting on the
+   person. An idle agent's face stays clean; a paused one fades a little. */
+.as-status {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: hsl(var(--sidebar));
+}
+
+.as-status[data-status="idle"],
+.as-status[data-status="paused"] {
+  opacity: 0;
+}
+
+.as-status::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: hsl(var(--muted-foreground));
+}
+
+.as-status[data-status="working"]::after {
+  background: hsl(var(--success));
+  animation: as-breathe 1.6s ease-in-out infinite;
+}
+
+.as-status[data-status="unread"]::after {
+  background: hsl(var(--accent));
+}
+
+/* Needs you: a ring, larger than a dot, so it reads before colour does. */
+.as-status[data-status="needs-you"] {
+  width: 16px;
+  height: 16px;
+  right: -3px;
+  bottom: -3px;
+}
+
+.as-status[data-status="needs-you"]::after {
+  width: 12px;
+  height: 12px;
+  background: hsl(var(--sidebar));
+  box-shadow: inset 0 0 0 3px hsl(var(--warning));
+}
+
+@keyframes as-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-status[data-status="working"]::after {
+    animation: none;
+  }
+}
+
+.as-shortcut-badge {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  box-shadow: var(--as-shadow-control);
+}
+
+/* --- pinned tiles ---------------------------------------------------------- */
+
+.as-pins {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.as-pin {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--as-radius-lg);
+  padding: 10px 2px 8px;
+  transition: background-color var(--as-dur-2) var(--as-ease);
+  animation: as-pin-in var(--as-dur-3) var(--as-spring);
+}
+
+.as-pin:hover {
+  background: hsl(var(--secondary) / 0.6);
+}
+
+.as-pin[data-active="true"] {
+  background: hsl(var(--secondary));
+}
+
+.as-pin-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 16px;
+  color: hsl(var(--muted-foreground));
+}
+
+.as-pin[data-active="true"] .as-pin-name {
+  color: hsl(var(--foreground));
+}
+
+@keyframes as-pin-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
+/* --- hover card ------------------------------------------------------------ */
+
+.as-hovercard {
+  position: fixed;
+  z-index: 90;
+  width: 280px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--as-radius-lg);
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: var(--as-shadow-pop), var(--as-sheen-edge);
+  padding: 14px;
+  pointer-events: none;
+  animation: as-pop-in var(--as-dur-2) var(--as-ease-out);
+}
+
+.as-hovercard .as-status {
+  background: hsl(var(--popover));
+}
+
+/* --- empty states ---------------------------------------------------------- */
+
+.as-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 12px;
+  font-size: 13px;
+  line-height: 19px;
+  color: hsl(var(--muted-foreground));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .as-search,
+  .as-menu,
+  .as-pin {
+    animation: none;
+  }
+}

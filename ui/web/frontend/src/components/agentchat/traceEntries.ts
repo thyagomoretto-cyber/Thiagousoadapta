@@ -1,0 +1,605 @@
+/**
+ * A turn's work in the shape the Codex app draws it.
+ *
+ * Codex reads like a conversation, not a log: what the model says between
+ * its calls is ordinary prose at full contrast, and each stretch of calls in
+ * between collapses to ONE quiet line that says what was done — "Ran
+ * commands, searched the web" — with the stretch's real mark in front (the
+ * plugin's logo, the CLI vendor's logo, else a plain terminal or pencil).
+ * The line opens to the single calls; a call opens to its raw input and
+ * output. A finished turn folds to "Worked for 4m 07s".
+ *
+ * This module is the pure model behind that: blocks → prose and activity
+ * stretches, the wording of every line, the fold's label, and the same
+ * timeline as Markdown for copying. The renderer is TraceTimeline.tsx.
+ *
+ * It never invents a reason the model did not give, never draws wordless
+ * (redacted) thinking, and never draws plumbing (loading a tool's schema,
+ * polling a question card).
+ *
+ * Placeholders never use `{name}`: the i18n layer fills that token with the
+ * assistant's name before any string reaches this module.
+ */
+
+import { fill } from "@/i18n";
+import { MCP_TOOLS_SERVER_NAMES } from "@/lib/branding";
+import { cliVendor } from "@/lib/cliVendors";
+import { stripInlineMarks } from "@/lib/plainMarks";
+import { resolveToolBrand } from "@/lib/toolBrand";
+import { describeToolStep } from "@/lib/toolStepLabel";
+import { isCredentialTool, isQuestionTool, type ReasoningBlock, type TextBlock, type ToolBlock, type TurnBlock, type TurnStatus } from "./reduce";
+import { toolDiff } from "./toolDiff";
+import { traceToolIdentity, traceToolName } from "./traceActivity";
+
+export type Translate = (key: string) => string;
+
+/** How a call stands. */
+export type CallStatus = "running" | "done" | "failed" | "blocked" | "declined" | "interrupted";
+
+/** What a call is, for its icon and its words. */
+export type CallKind = "command" | "read" | "list" | "search" | "edit" | "write" | "image" | "web" | "family" | "service" | "tool";
+
+export interface OutputPreview { lines: string[]; more: number }
+
+export interface Call {
+  id: string;
+  block: ToolBlock;
+  kind: CallKind;
+  /** The line's words: the command itself, "Read src/app.ts", "Searched the wiki". */
+  text: string;
+  /** A quieter tail: a query, a title, an operation's argument. */
+  detail: string;
+  status: CallStatus;
+  /** Why it did not succeed, in plain words; "" otherwise. */
+  reason: string;
+  /** Edit size, when it is an edit. */
+  added: number;
+  removed: number;
+  /** A terse result for tools that are not commands ("3 results", a message). */
+  result: string;
+  /** The stretch summary's bucket ("command", "family:wiki", "used:Linear"). */
+  bucket: string;
+  /** A brand to draw instead of a plain glyph: a plugin, an MCP server, a CLI vendor. */
+  brand: string | null;
+}
+
+/** What the model said — narration between calls, or its reasoning text. */
+export interface ProseEntry { kind: "prose"; id: string; text: string; tone: "narration" | "reasoning"; block: TextBlock | ReasoningBlock }
+/** A stretch of calls between two pieces of prose. */
+export interface ActivityEntry { kind: "activity"; id: string; calls: Call[]; summary: string }
+/** Work the caller draws itself: approvals, question cards, a streaming thought, a live reply. */
+export interface LiveEntry { kind: "live"; id: string; block: TurnBlock }
+
+export type TimelineEntry = ProseEntry | ActivityEntry | LiveEntry;
+
+export interface Timeline {
+  entries: TimelineEntry[];
+  /** Calls told (live ones included). */
+  callCount: number;
+  /** Calls that failed, were blocked, declined or cut off. */
+  problemCount: number;
+}
+
+export interface TimelineOptions {
+  t: Translate;
+  /** UI language tag, for plurals. */
+  lang: string;
+  status: TurnStatus;
+  /**
+   * Live turns keep replies and streaming thoughts for the caller; a folded
+   * finished turn tells its narration as prose.
+   */
+  live: boolean;
+}
+
+const KEY = "trace_report";
+export const tr = (t: Translate, key: string, vars: Record<string, string | number> = {}) => fill(t(`${KEY}.${key}`), vars);
+
+/** "49ms", "0.4s", "12s", "4m 07s". */
+export function traceDuration(ms: number): string {
+  // Keep short, measured calls visible instead of rounding 49 ms to "0.0s".
+  if (ms > 0 && ms < 100) return `${Math.ceil(ms)}ms`;
+  const seconds = Math.max(0, ms) / 1000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  return `${Math.floor(seconds / 60)}m ${String(Math.floor(seconds % 60)).padStart(2, "0")}s`;
+}
+
+export function plural(lang: string, count: number): "one" | "other" {
+  try {
+    return new Intl.PluralRules(lang).select(count) === "one" ? "one" : "other";
+  } catch {
+    return count === 1 ? "one" : "other";
+  }
+}
+
+export function capitalize(text: string): string {
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/** A registry name as words, sentence case: "society_routines" → "Society routines". */
+function humanize(name: string): string {
+  return capitalize(name.split(/[-_\s.]+/).filter(Boolean).join(" ").toLowerCase());
+}
+
+function oneLine(text: string, max: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+}
+
+function inputRecord(block: ToolBlock): Record<string, unknown> {
+  const record = block.input && typeof block.input === "object" && !Array.isArray(block.input)
+    ? block.input as Record<string, unknown> : {};
+  // A runtime's permission request nests the tool's own arguments
+  // ({ tool: "write_file", arguments: { path } }): those are what it acts on.
+  const nested = record.arguments;
+  return nested && typeof nested === "object" && !Array.isArray(nested)
+    ? { ...(nested as Record<string, unknown>), ...record }
+    : record;
+}
+
+function firstString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+/** The last three segments of a path — what a person recognises. */
+export function shortPath(path: string): string {
+  const parts = path.replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : path;
+}
+
+/** A bare tool identifier ("write_file", "tool_search"), not a file or a sentence. */
+export function isIdentifier(text: string): boolean {
+  return /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+$/i.test(text.trim());
+}
+
+/**
+ * What a call's output says, without a runtime's own receipt words: a first
+ * line that only names the tool ("tool_search result", "✅ patch completed")
+ * and a bare "done" or "failed" stand-in for no output at all.
+ */
+export function outputGist(output: string): string {
+  const text = output.trim();
+  if (/^(?:done|failed)$/i.test(text)) return "";
+  return text.replace(/^(?:✅\s*)?[\w.:-]+ (?:result|completed)\s*(?:\r?\n|$)/i, "").trim();
+}
+
+/** Plumbing calls draw nothing: loading a tool's schema, polling a question card. */
+export function isPlumbing(block: ToolBlock): boolean {
+  if (isQuestionTool(block.name) && !block.question) return true;
+  if (isCredentialTool(block.name) && !block.credential && !block.isError) return true;
+  if (block.name.replace(/^mcp__[^_]+__/, "") === "ToolSearch") {
+    return firstString(inputRecord(block), ["query"]).startsWith("select:");
+  }
+  return false;
+}
+
+/** Asks the person for something: drawn by the caller as its card. */
+function needsPerson(block: ToolBlock): boolean {
+  return Boolean(block.question || block.credential) || Boolean(block.approval && block.approval.decision === null);
+}
+
+function stripCapMarker(text: string): string {
+  return text.replace(/…\s*\(\+\d+ more chars\)\s*$/, "").trimEnd();
+}
+
+/** What a wrapped command printed ({exit_code, stdout, stderr}), or null. */
+function printedOutput(output: string): string | null {
+  if (!output.trimStart().startsWith("{")) return null;
+  try {
+    const record = JSON.parse(output) as Record<string, unknown>;
+    if (!record || typeof record !== "object" || typeof record.stdout !== "string") return null;
+    return record.stdout.trim() || (typeof record.stderr === "string" ? record.stderr : "");
+  } catch {
+    return null;
+  }
+}
+
+/** The output a person reads: unwrapped, cap marker gone. */
+export function readableOutput(block: ToolBlock): string {
+  const raw = stripCapMarker(block.output ?? "");
+  return printedOutput(raw) ?? raw;
+}
+
+/** The first lines of an output and how many more there were. */
+export function previewOutput(output: string, max = 3): OutputPreview | null {
+  const lines = output.split(/\r?\n/).map((line) => line.replace(/\s+$/, "")).filter((line) => line.trim());
+  if (!lines.length) return null;
+  return { lines: lines.slice(0, max).map((line) => (line.length > 160 ? `${line.slice(0, 159)}…` : line)), more: Math.max(0, lines.length - max) };
+}
+
+/** A refusal reason in plain words, when it is one of the system's own. */
+function refusalReason(reason: string, t: Translate): string | null {
+  const text = reason.trim();
+  if (/^blacklist\b/i.test(text) || /tool-declared-block/i.test(text)) return tr(t, "reason.rule");
+  if (/^plan mode/i.test(text)) return tr(t, "reason.plan_mode");
+  if (/^cancelled\b/i.test(text)) return tr(t, "reason.cancelled");
+  if (/^timeout$/i.test(text) || /approval timed out/i.test(text)) return tr(t, "reason.timeout");
+  if (/approval[_ ]unavailable|no approval channel/i.test(text)) return tr(t, "reason.no_approver");
+  return null;
+}
+
+function statusOf(block: ToolBlock, turn: TurnStatus, t: Translate): { status: CallStatus; reason: string } {
+  if (block.approval?.decision === "deny") {
+    const rule = refusalReason(block.approval.summary || block.output || "", t);
+    return rule ? { status: "blocked", reason: rule } : { status: "declined", reason: "" };
+  }
+  if (block.output === null) return turn === "running" ? { status: "running", reason: "" } : { status: "interrupted", reason: "" };
+  if (block.isError) {
+    const raw = stripCapMarker(block.output);
+    const rule = refusalReason(raw, t);
+    if (rule) return { status: "blocked", reason: rule };
+    return { status: "failed", reason: oneLine(raw.split(/\r?\n/).find((line) => line.trim()) ?? "", 200) };
+  }
+  return { status: "done", reason: "" };
+}
+
+const ACTION_KEYS: Record<string, string[]> = {
+  command: ["command", "cmd", "CommandLine", "commandLine", "script"],
+  read: ["file_path", "path", "notebook_path", "filename"],
+  edit: ["file_path", "path", "notebook_path"],
+  write: ["file_path", "path", "filename"],
+  list: ["path", "directory", "dir", "pattern"],
+  search: ["pattern", "query", "regex", "q"],
+};
+
+/** Families of Jarvis's own tools that have their own words. */
+const FAMILIES = new Set([
+  "wiki", "wiki_write", "artifact", "skill", "skill_create", "web", "screen", "screen_recall",
+  "control", "navigate", "app", "memory", "memory_update", "profile", "contact", "call",
+  "worker", "model", "mcp_admin", "settings", "verify",
+]);
+
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)$/i;
+
+/** Keys whose string value says what a structured result was about. */
+const GIST_KEYS = ["summary", "message", "result", "status", "title", "answer", "text", "detail", "description"];
+
+/** A terse result: a count, the tool's own message, or its first line. */
+function terseResult(block: ToolBlock, t: Translate, lang: string): string {
+  const text = outputGist(readableOutput(block));
+  if (!text) return "";
+  if (text.startsWith("{") || text.startsWith("[")) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(text); } catch { parsed = undefined; }
+    if (Array.isArray(parsed)) {
+      return parsed.length ? tr(t, `result.items_${plural(lang, parsed.length)}`, { count: parsed.length }) : tr(t, "result.none");
+    }
+    if (parsed && typeof parsed === "object") {
+      const record = parsed as Record<string, unknown>;
+      for (const key of GIST_KEYS) {
+        const value = record[key];
+        if (typeof value === "string" && value.trim()) return oneLine(value, 120);
+      }
+      for (const value of Object.values(record)) {
+        if (Array.isArray(value)) {
+          return value.length ? tr(t, `result.items_${plural(lang, value.length)}`, { count: value.length }) : tr(t, "result.none");
+        }
+      }
+      return "";
+    }
+    if (/^\{\s*["'][\w-]+["']\s*:\s*\[\s*\]/.test(text)) return tr(t, "result.none");
+    const nested = text.slice(1).search(/[[{]/);
+    const top = nested < 0 ? text : text.slice(0, nested + 1);
+    const gist = new RegExp(`["'](?:${GIST_KEYS.join("|")})["']\\s*:\\s*["']([^"']{2,})["']`).exec(top);
+    return gist ? oneLine(gist[1], 120) : "";
+  }
+  // A runtime's receipt is Markdown ("- **count:** 3"): its words, not its marks.
+  const first = text.split(/\r?\n/).find((line) => line.trim()) ?? "";
+  return oneLine(stripInlineMarks(first.replace(/^\s*(?:[-*+]|#+)\s+/, "")), 120);
+}
+
+function diffSize(block: ToolBlock): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const file of toolDiff(block.name, block.input, block.output) ?? []) {
+    for (const line of file.lines) {
+      if (line.kind === "add") added += 1;
+      else if (line.kind === "del") removed += 1;
+    }
+  }
+  return { added, removed };
+}
+
+/**
+ * A command line without the directory change in front of it: agents start
+ * most commands with `cd "C:/long/path" && …`, and the line should show what
+ * ran, not where. The full command stays in the call's details.
+ */
+export function withoutCd(command: string): string {
+  let text = command.trim();
+  for (let i = 0; i < 3; i++) {
+    const next = text.replace(/^(?:cd|Set-Location|pushd)\s+(?:"[^"]*"|'[^']*'|\S+)\s*(?:&&|;|\|\|)\s*/i, "");
+    if (next === text) break;
+    text = next;
+  }
+  return text || command.trim();
+}
+
+/** The program a command runs, past env assignments and wrappers ("gh" in "FOO=1 npx gh …"). */
+export function commandBinary(command: string): string {
+  const words = command.trim().split(/\s+/);
+  for (const word of words) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) continue;
+    if (/^(sudo|npx|pnpm|bunx|uvx|time|env|&|cmd|\/c|powershell|pwsh|-Command|-NoProfile)$/i.test(word)) continue;
+    return word.replace(/^["'&]+|["']+$/g, "").split(/[\\/]/).pop()?.replace(/\.(exe|cmd|bat)$/i, "") ?? "";
+  }
+  return "";
+}
+
+/**
+ * The tool behind a call to the app's own MCP server, under every name that
+ * server has had ("dodaios/gmail", "jarvis/gmail" → "gmail"); null for
+ * another server's tool or a name without a server.
+ */
+export function ownServerTool(name: string): string | null {
+  const slash = name.indexOf("/");
+  if (slash <= 0 || slash === name.length - 1) return null;
+  return MCP_TOOLS_SERVER_NAMES.includes(name.slice(0, slash).toLowerCase()) ? name.slice(slash + 1) : null;
+}
+
+/** Hermes's road to the app's own server: "mcp_dodaios_<tool>" (one underscore). */
+const OWN_SINGLE = new RegExp(`^mcp_(?:${MCP_TOOLS_SERVER_NAMES.join("|")})_(?!_)`, "i");
+
+/**
+ * A tool's own name past the road it came by: "mcp__dodaios__society_ask_user",
+ * "mcp_dodaios_society_ask_user" and "dodaios/society_ask_user" are all
+ * "society_ask_user"; another server's tool keeps only its tool part.
+ */
+export function bareToolName(name: string): string {
+  const raw = name.trim();
+  if (OWN_SINGLE.test(raw)) return raw.replace(OWN_SINGLE, "");
+  const routed = traceToolName(raw);
+  const slash = routed.lastIndexOf("/");
+  return slash >= 0 ? routed.slice(slash + 1) : routed;
+}
+
+/**
+ * A tool id a person can read: "mcp__linear__list_issues" → "List issues",
+ * "mcp__dodaios__society_ask_user" → "Ask user" (the agents' own namespace
+ * is the road too).
+ */
+export function readableToolName(name: string): string {
+  const bare = bareToolName(name);
+  return humanize(bare.replace(/^society_(?=.)/i, "")) || humanize(bare) || name;
+}
+
+/**
+ * The agents' own tools ("mcp__dodaios__society-create-routine") by what they
+ * do for the person. Keys are bare names past "society", lowercase, without
+ * "-" or "_"; values name a `trace_report.tool.*` line.
+ */
+const AGENT_TOOLS: Record<string, string> = {
+  createroutine: "create_routine", routines: "routines", listroutines: "routines",
+  updateroutine: "update_routine", routineoperation: "update_routine", invokeroutine: "invoke_routine",
+  proposechange: "propose_change", messageagent: "message_agent", message: "message_agent",
+  status: "status", review: "review", createagent: "create_agent", updateagent: "update_agent",
+  archiveagent: "archive_agent", switchagentmodel: "switch_model",
+  teamassign: "team", teamtasks: "team", teamreport: "team", teamgoals: "team", teamboard: "team", teamsweep: "team",
+  wikinote: "wiki_note", memoryrecall: "memory_recall", conversationrecall: "conversation_recall",
+  runskill: "run_skill", skill: "run_skill", browser: "browser", browseraction: "browser",
+  shell: "shell", sandbox: "sandbox", requestcredential: "request_credential",
+  capabilitycatalog: "catalog", agentcatalog: "catalog", context: "context",
+};
+
+/** The `trace_report.tool.*` key of one of the agents' own tools, or null. */
+export function agentToolKey(name: string): string | null {
+  const raw = name.trim();
+  const routed = traceToolName(raw);
+  const own = OWN_SINGLE.test(raw) || !routed.includes("/") || ownServerTool(routed) !== null;
+  if (!own) return null;
+  const bare = bareToolName(raw).toLowerCase();
+  if (!/^society[-_]/.test(bare)) return null;
+  return AGENT_TOOLS[bare.replace(/^society[-_]/, "").replace(/[-_\s]/g, "")] ?? null;
+}
+
+/** One of the agents' own tools in words ("Create a routine"), or null for any other tool. */
+export function agentToolLabel(name: string, t: Translate): string | null {
+  const key = agentToolKey(name);
+  return key ? tr(t, `tool.${key}`) : null;
+}
+
+/** Any tool id a person can read: the agents' own tools by what they do, others by name. */
+export function friendlyToolName(name: string, t: Translate): string {
+  return agentToolLabel(name, t) ?? readableToolName(name);
+}
+
+/** A summary that is only the tool's id ("mcp__dodaios__society_routines"), not words. */
+export function isRawToolId(text: string, name = ""): boolean {
+  const clean = text.trim();
+  if (!clean || /\s/.test(clean)) return false;
+  if (name && (clean === name.trim() || bareToolName(clean) === bareToolName(name))) return true;
+  return /^mcp_/i.test(clean) || /^society[-_][a-z0-9_-]+$/i.test(clean) || /^[a-z0-9]+(?:[_-][a-z0-9]+)*\/[\w-]+$/i.test(clean) || /__/.test(clean);
+}
+
+type InternalTool = "lookup" | "asked";
+
+/**
+ * The app's internal tools, which speak in the product's words instead of
+ * their ids. Keys are bare names, lowercase, without "-" or "_".
+ */
+const INTERNAL_TOOLS: Record<string, InternalTool> = {
+  toolsearch: "lookup", tooldescribe: "lookup", describetool: "lookup", searchtools: "lookup",
+  listtools: "lookup", toolslist: "lookup", toolsearchresult: "lookup", gettoolschema: "lookup",
+  societyaskuser: "asked", askuser: "asked", askuserquestion: "asked", requestuserinput: "asked",
+};
+
+/** Which internal tool a call is, when it comes by no server or the app's own. */
+export function internalTool(name: string): InternalTool | null {
+  const raw = name.trim();
+  const routed = traceToolName(raw);
+  const own = OWN_SINGLE.test(raw) || !routed.includes("/") || ownServerTool(routed) !== null;
+  if (!own) return null;
+  return INTERNAL_TOOLS[bareToolName(raw).toLowerCase().replace(/[-_\s]/g, "")] ?? null;
+}
+
+/** The tools a lookup named, readable: "select:mcp__dodaios__society_ask_user" → "Society ask user". */
+function lookupDetail(record: Record<string, unknown>): string {
+  const query = firstString(record, ["query", "name", "tool", "tool_name", "names", "tools"]);
+  if (!query) return "";
+  const select = /^select:/i.test(query);
+  const names = query.replace(/^select:/i, "").split(",").map((part) => part.trim()).filter(Boolean);
+  // Tool ids read as names; a free-text search ("send an email") stays as typed.
+  const ids = select || (names.length > 0 && names.every((part) => /^[\w./-]+$/.test(part) && /[_/]/.test(part)));
+  return oneLine(ids ? names.map(readableToolName).join(", ") : query, 100);
+}
+
+/** The first question an "ask the person" call carried. */
+function askedDetail(record: Record<string, unknown>): string {
+  const questions = Array.isArray(record.questions) ? record.questions : [];
+  const first = questions[0] && typeof questions[0] === "object" ? questions[0] as Record<string, unknown> : {};
+  return oneLine(firstString(first, ["question", "header"]) || firstString(record, ["question", "prompt", "message"]), 100);
+}
+
+/** One finished or running call as its line. */
+export function callOf(block: ToolBlock, turn: TurnStatus, t: Translate, lang: string): Call {
+  const view = traceToolIdentity(block);
+  const record = inputRecord(block);
+  const { status, reason } = statusOf(block, turn, t);
+  const name = traceToolName(block.name);
+  const ownTool = ownServerTool(name);
+  const own = ownTool !== null ? describeToolStep(ownTool, block.input) : null;
+  const description = own && (FAMILIES.has(own.family) || own.family === "shell") ? own : view.description;
+  const action = view.action === "memory" ? null : view.action;
+  const base = { id: block.callId, block, status, reason, added: 0, removed: 0, result: "", detail: "", brand: null as string | null };
+
+  // The app's internal tools say what they did for the person, never their ids.
+  const internal = internalTool(block.name);
+  if (internal !== null) {
+    const detail = internal === "lookup" ? lookupDetail(record) : askedDetail(record);
+    return { ...base, kind: "tool", text: tr(t, `call.${internal}`), detail, bucket: internal };
+  }
+
+  // The app's CLI wrappers ("mcp__dodaios__cli_jarvisctl") run a command line.
+  const wrapper = ownTool !== null && /^cli_/i.test(ownTool) && firstString(record, ACTION_KEYS.command);
+  if (action === "command" || description.family === "shell" || wrapper) {
+    const raw = firstString(record, ACTION_KEYS.command) || (typeof block.input === "string" ? block.input : "") || description.detail;
+    const command = oneLine(withoutCd(raw.split(/\r?\n/).find((line) => line.trim()) ?? ""), 200);
+    // A vendor CLI ("gh", "vercel", "docker") wears its vendor's logo.
+    const binary = commandBinary(command);
+    return { ...base, kind: "command", text: command || capitalize(tr(t, "act.command_one")), bucket: "command", brand: cliVendor(binary) ? binary : null };
+  }
+  if (action === "read") {
+    const path = firstString(record, ACTION_KEYS.read) || description.detail;
+    // Codex says "Viewed an image"; the file name follows quieter.
+    if (IMAGE_FILE.test(path)) return { ...base, kind: "image", text: capitalize(tr(t, "act.image_one")), detail: shortPath(path), bucket: "image" };
+    return { ...base, kind: "read", text: tr(t, "call.read", { target: shortPath(path) }), bucket: "read" };
+  }
+  if (action === "list") {
+    const path = firstString(record, ACTION_KEYS.list) || description.detail || ".";
+    // "Listed *" says nothing: a bare wildcard or the current folder is the folder itself.
+    const text = /^(?:\.[\\/]?|\*{1,2}(?:[\\/]\*)?(?:\.\*)?)$/.test(path.trim())
+      ? capitalize(tr(t, "act.list_one")) : tr(t, "call.list", { target: shortPath(path) });
+    return { ...base, kind: "list", text, bucket: "list" };
+  }
+  if (action === "search") {
+    const pattern = oneLine(firstString(record, ACTION_KEYS.search) || description.detail, 60);
+    const where = firstString(record, ["path", "glob", "include"]);
+    const text = where ? tr(t, "call.search_in", { pattern, path: shortPath(where) }) : tr(t, "call.search", { pattern });
+    return { ...base, kind: "search", text, bucket: "search" };
+  }
+  if (action === "edit" || action === "write") {
+    // A runtime that names only its tool ("write_file") never makes that the file.
+    const named = firstString(record, ACTION_KEYS[action]) || (isIdentifier(description.detail) ? "" : description.detail);
+    const text = named ? tr(t, `call.${action}`, { target: shortPath(named) }) : capitalize(tr(t, `act.${action}_one`));
+    return { ...base, ...diffSize(block), kind: action, text, bucket: action };
+  }
+  const family = description.family;
+  const result = status === "done" ? terseResult(block, t, lang) : "";
+  if (FAMILIES.has(family)) {
+    const kind: CallKind = family === "web" ? "web" : "family";
+    return { ...base, kind, text: capitalize(tr(t, `family.${family}`)), detail: oneLine(description.detail, 100), result, bucket: `family:${family}` };
+  }
+  // The agents' own tools say what they do ("Create a routine"), never their ids.
+  const agentLabel = agentToolLabel(block.name, t);
+  if (agentLabel) {
+    return { ...base, kind: "tool", text: agentLabel, detail: oneLine((own ?? description).detail, 100), result, bucket: `agent:${agentLabel}` };
+  }
+  if (own && ownTool !== null) {
+    // The app's own server is the road, not the destination: "dodaios/gmail"
+    // is the Gmail plugin, "dodaios/society_routines" is that tool by name.
+    const rest = ownTool;
+    const brand = resolveToolBrand(rest);
+    if (brand.logoUrl) {
+      return { ...base, kind: "service", text: brand.label, detail: oneLine(own.detail, 100), result, bucket: `used:${brand.label}`, brand: brand.brandId ?? brand.label };
+    }
+    const label = humanize(rest);
+    return { ...base, kind: "tool", text: label, detail: oneLine(own.detail, 100), result, bucket: `used:${label}` };
+  }
+  const raw = OWN_SINGLE.test(block.name) ? bareToolName(block.name) : description.label || view.service || block.name;
+  const label = /[A-Z]/.test(raw) ? raw : humanize(bareToolName(raw));
+  if (view.integration || family === "mcp" || family === "service") {
+    const service = view.service || label;
+    return { ...base, kind: "service", text: label, detail: oneLine(description.detail, 100), result, bucket: `used:${service}`, brand: view.identity.logo ? view.identity.key ?? service : null };
+  }
+  return { ...base, kind: "tool", text: label, detail: oneLine(description.detail, 100), result, bucket: `used:${label}` };
+}
+
+/** "Ran commands, searched the web, used Linear" — a stretch in one line. */
+export function summarize(calls: Call[], t: Translate, lang: string): string {
+  if (calls.length === 1) return calls[0].text;
+  const counts = new Map<string, number>();
+  for (const call of calls) counts.set(call.bucket, (counts.get(call.bucket) ?? 0) + 1);
+  const used: string[] = [];
+  const parts: string[] = [];
+  for (const [bucket, n] of counts) {
+    if (bucket.startsWith("used:")) used.push(bucket.slice(5));
+    else if (bucket.startsWith("agent:")) parts.push(bucket.slice(6));
+    else if (bucket.startsWith("family:")) parts.push(tr(t, `family.${bucket.slice(7)}`));
+    else parts.push(tr(t, `act.${bucket}_${plural(lang, n)}`));
+  }
+  if (used.length) parts.push(tr(t, "act.used", { what: used.slice(0, 3).join(", ") }));
+  return capitalize(parts.join(", "));
+}
+
+/** Lay out a turn's blocks as its timeline. */
+export function buildTimeline(blocks: TurnBlock[], options: TimelineOptions): Timeline {
+  const { t, lang, status, live } = options;
+  const entries: TimelineEntry[] = [];
+  let stretch: Call[] = [];
+  let callCount = 0;
+  let problemCount = 0;
+  const flush = () => {
+    if (!stretch.length) return;
+    entries.push({ kind: "activity", id: `act:${stretch[0].id}`, calls: stretch, summary: summarize(stretch, t, lang) });
+    stretch = [];
+  };
+
+  for (const block of blocks) {
+    if (block.kind === "reasoning") {
+      if (live && status === "running" && block.live) {
+        flush();
+        entries.push({ kind: "live", id: block.id, block });
+        continue;
+      }
+      const text = block.text.trim();
+      if (!text) continue;
+      flush();
+      entries.push({ kind: "prose", id: block.id, text, tone: "reasoning", block });
+      continue;
+    }
+    if (block.kind === "text") {
+      if (!block.text.trim()) continue;
+      flush();
+      if (live) entries.push({ kind: "live", id: block.id, block });
+      else entries.push({ kind: "prose", id: block.id, text: block.text.trim(), tone: "narration", block });
+      continue;
+    }
+    if (isPlumbing(block)) continue;
+    callCount += 1;
+    if (needsPerson(block)) {
+      flush();
+      entries.push({ kind: "live", id: block.callId, block });
+      continue;
+    }
+    const call = callOf(block, status, t, lang);
+    if (call.status !== "done" && call.status !== "running") problemCount += 1;
+    stretch.push(call);
+  }
+  flush();
+  return { entries, callCount, problemCount };
+}

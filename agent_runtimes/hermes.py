@@ -1,0 +1,783 @@
+"""Hermes Agent as a society agent runtime (``docs/agent-runtimes.md``).
+
+A turn runs on the agent's ``hermes acp`` process, which stays warm
+between turns (``warm.py``): started once, initialized, with the conversation
+open, so a message only costs ``session/prompt``. Every agent is a Hermes *profile* of
+one Hermes data root that Jarvis owns (``<runtimes_root>/hermes-home``):
+``HERMES_HOME`` points at ``hermes-home/profiles/<agent>``. Jarvis writes the
+profile's ``config.yaml`` (JSON, which is valid YAML) and ``SOUL.md`` before
+every turn and hands the Jarvis MCP server over per session; the profile keeps
+Hermes' own session store, so ``session/load`` reopens the agent's one
+conversation.
+
+Why profiles of one root, not one root per agent: Hermes keeps its Python
+dependency environment per data root. A root per agent made the first turn of
+every agent (and the first after every Hermes update) build a ~700 MB
+environment for about two minutes, and Hermes' Windows home maintenance put
+every agent folder on the user's PATH. Profiles share their root's
+environment, which the setup job prepares (:meth:`HermesRuntime.prepare_command`)
+before a turn needs it. The root is Jarvis' own, not the person's Hermes home:
+a profile of the person's root would read (and rotate) their own Hermes
+logins through Hermes' global-root credential fallback.
+
+Hermes' self-learning extras (memory nudges, background review, curator,
+skill-creation nudges, title generation) are switched off: Jarvis owns
+memory and skills for every runtime, and nothing the person did not start may
+spend their key. A key Hermes does not know is ignored by Hermes, so a renamed
+option degrades to Hermes' default instead of breaking the turn.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import hashlib
+import json
+import logging
+import os
+import re
+import shutil
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, Final
+from urllib.parse import urlsplit
+
+from dodaios.agent_runtimes import base, versions
+from dodaios.agent_runtimes.acp import McpServer
+from dodaios.agent_runtimes.base import (
+    DetectCache,
+    RuntimeLaunch,
+    RuntimeStatus,
+    RuntimeTurn,
+    RuntimeUnavailable,
+    TurnSlots,
+    child_env,
+    first_existing,
+    format_version,
+    home_key,
+    is_windows,
+    parse_version,
+    persona_text,
+    posix_installer,
+    private_dir,
+    ps_quote,
+    run_version,
+    safe_key,
+    which,
+    windows_installer,
+    write_if_changed,
+    write_json_if_changed,
+)
+from dodaios.agent_runtimes.model_map import KEY_ENV_VAR, RUNTIME_PROVIDER_NAME
+
+log = logging.getLogger(__name__)
+
+NAME: Final[str] = "hermes"
+LABEL: Final[str] = "Hermes"
+
+_INSTALL_URL_PS1: Final[str] = "https://hermes-agent.nousresearch.com/install.ps1"
+_INSTALL_URL_SH: Final[str] = "https://hermes-agent.nousresearch.com/install.sh"
+
+#: Hermes' own profile-name rule (``hermes_cli.main._PROFILE_NAME_RE``).
+_PROFILE_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+#: The profile the setup job runs Hermes under to prepare the shared root.
+_SETUP_KEY: Final[str] = "~setup"
+
+#: Hermes toolsets no Jarvis agent gets: a headless Chromium (Jarvis has a
+#: visible browser over MCP), background desktop control, Hermes' own
+#: scheduler (Dodaios owns routines and their budgets) and Hermes' bundled
+#: skill library (Dodaios owns skills on every runtime; its listing alone
+#: was a third of every request's prompt).
+_ALWAYS_DISABLED: Final[frozenset[str]] = frozenset(
+    {"browser", "computer_use", "cronjob", "skills"}
+)
+
+#: A warm-up only runs when the agent's turn slot is free at once.
+_WARM_SLOT_WAIT_S: Final[float] = 0.5
+
+#: A turn's Hermes never installs or syncs dependencies on its own: that
+#: work (up to minutes, before the first token) belongs to the setup job
+#: (:meth:`HermesRuntime.prepare_command`), which runs without this mark.
+_TURN_ENV: Final[dict[str, str]] = {"HERMES_DISABLE_LAZY_INSTALLS": "1"}
+
+#: Effort levels Hermes accepts in ``agent.reasoning_effort``
+#: (``hermes_constants.VALID_REASONING_EFFORTS`` plus ``none``).
+_HERMES_EFFORTS: Final[frozenset[str]] = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
+
+_BIN_BLOCKER_TEXT: Final[str] = (
+    "Dodaios keeps this a file on purpose. Hermes' home maintenance\n"
+    "publishes launchers into <data root>/bin and puts that folder on the\n"
+    "user's PATH on Windows; a file here makes that step a no-op for the data\n"
+    "root Dodaios' agents use, so they never change the user's PATH.\n"
+)
+
+
+def _binary() -> str | None:
+    """The Hermes launcher: the official installer's location first, then PATH.
+
+    The setup job installs Hermes with its official installer, which puts the
+    launcher in a fixed per-user folder (:func:`_install_locations`); that one
+    answers before anything on PATH. A PATH entry never answers when it is
+    inside a Jarvis agent folder (builds before the profile layout left
+    per-agent ``bin`` folders on the user's PATH; ``path_cleanup`` removes
+    them) or inside a temporary folder (a test or audit run that installed a
+    throwaway Hermes and put its ``bin`` on the user's PATH; the PATH itself
+    is left as it is).
+    """
+    found_path = first_existing(_install_locations())
+    if found_path is not None and not _never_on_path(str(found_path.parent)):
+        return str(found_path)
+    return which("hermes", "hermes.exe", "hermes.cmd", skip=_never_on_path)
+
+
+def _install_locations() -> list[Path]:
+    """Where Hermes' official installers put the launcher, per OS."""
+    if is_windows():
+        local = os.environ.get("LOCALAPPDATA")
+        if not local:
+            return []
+        # The installer swaps ``hermes.exe`` during an update (it leaves a
+        # ``hermes.exe.deleteme`` behind); its ``hermes.cmd`` stays meanwhile.
+        bin_dir = Path(local) / "hermes" / "bin"
+        return [bin_dir / "hermes.exe", bin_dir / "hermes.cmd"]
+    home = Path.home()
+    return [home / ".local" / "bin" / "hermes", home / ".hermes" / "bin" / "hermes"]
+
+
+def _temp_roots() -> list[str]:
+    """This machine's temporary folders, normalised for a prefix check."""
+    import tempfile
+
+    roots = {tempfile.gettempdir(), os.environ.get("TEMP", ""), os.environ.get("TMP", "")}
+    if not is_windows():
+        # Compared against, never written to.
+        roots.update({"/tmp", "/var/tmp", os.environ.get("TMPDIR", "")})  # noqa: S108
+    out: list[str] = []
+    for root in roots:
+        if not root:
+            continue
+        out.append(_norm(root))
+        with contextlib.suppress(OSError):  # an unresolvable root still counts as written
+            out.append(_norm(str(Path(root).resolve())))
+    return sorted(set(out))
+
+
+def _norm(path: str) -> str:
+    return os.path.normcase(os.path.normpath(os.path.expandvars(path.strip().strip('"'))))
+
+
+#: A Windows temporary folder under any spelling of the profile path
+#: (``C:\Users\ADMINI~1\AppData\Local\Temp`` and the long name alike).
+_WINDOWS_TEMP: Final[re.Pattern[str]] = re.compile(
+    r"[\\/]appdata[\\/]local[\\/]temp(?:[\\/]|$)", re.IGNORECASE
+)
+
+
+def _in_temp(directory: str) -> bool:
+    if not directory.strip():
+        return False
+    normal = _norm(directory)
+    if _WINDOWS_TEMP.search(normal):
+        return True
+    for root in _temp_roots():
+        if normal == root or normal.startswith(root.rstrip("\\/") + os.sep):
+            return True
+    return False
+
+
+def _never_on_path(directory: str) -> bool:
+    """A PATH entry whose ``hermes`` must never run an agent."""
+    from dodaios.agent_runtimes.path_cleanup import is_jarvis_hermes_bin
+
+    return is_jarvis_hermes_bin(directory) or _in_temp(directory)
+
+
+def _install_hint() -> str:
+    if is_windows():
+        return f"iex (irm {_INSTALL_URL_PS1})"
+    return f"curl -fsSL {_INSTALL_URL_SH} | bash"
+
+
+# ------------------------------------------------------------------ layout
+
+
+def hermes_root() -> Path:
+    """The Hermes data root every Jarvis agent profile shares."""
+    return base.runtimes_root() / "hermes-home"
+
+
+def profile_name(key: str) -> str:
+    """Hermes profile name for a runtime home key (``<agent>`` / ``<agent>~runs``)."""
+    agent, runs = (key[: -len("~runs")], True) if key.endswith("~runs") else (key, False)
+    slug = re.sub(r"[^a-z0-9_-]+", "-", agent.lower()).strip("-_") or "agent"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:6]
+    if runs or slug != agent or len(slug) > 48:
+        # Lowercased, shortened or a routine folder: the hash keeps two keys
+        # that slug alike ("Ada" / "ada", "x~runs" / "x-runs") apart.
+        slug = f"{slug[:48].rstrip('-_') or 'agent'}-{'runs-' if runs else ''}{digest}"
+    name = slug[:64]
+    return name if _PROFILE_NAME.match(name) else f"agent-{digest}"
+
+
+def _root_config(pin: versions.Pin) -> dict[str, Any]:
+    config: dict[str, Any] = {
+        # Never put Jarvis' data root on the user's PATH (honoured on POSIX;
+        # the ``bin`` file covers Windows).
+        "cli": {"expose_on_path": False},
+        "approvals": {"mode": "manual"},
+    }
+    if pin.config_version is not None:
+        config["_config_version"] = pin.config_version
+    return config
+
+
+def prepare_root() -> Path:
+    """Create the shared root: marker config, ``profiles/``, the ``bin`` blocker."""
+    root = private_dir(hermes_root())
+    private_dir(root / "profiles")
+    # A root ``config.yaml`` is also what makes Hermes accept ``root/profiles``
+    # as a real profiles folder (``hermes_constants._is_hermes_profiles_root``).
+    write_json_if_changed(root / "config.yaml", _root_config(versions.pin(NAME)))
+    blocker = root / "bin"
+    if blocker.is_dir() and not blocker.is_symlink():
+        shutil.rmtree(blocker, ignore_errors=True)
+    if not blocker.exists():
+        write_if_changed(blocker, _BIN_BLOCKER_TEXT)
+    return root
+
+
+def profile_home(key: str) -> Path:
+    """The agent's Hermes profile folder (created on demand, with its root)."""
+    root = prepare_root()
+    home = private_dir(root / "profiles" / profile_name(key))
+    _adopt_legacy_home(key, home)
+    return home
+
+
+def _adopt_legacy_home(key: str, home: Path) -> None:
+    """Carry an agent's conversation over from the old per-agent data root.
+
+    Builds before the profile layout kept ``agent_runtimes/hermes/<agent>``,
+    each with its own ~700 MB dependency environment. The session store moves
+    into the profile (so the agent keeps its Hermes context); the old folder,
+    everything else in it rebuildable, is removed once that copy succeeded.
+    """
+    from dodaios.core.instance import current_instance
+
+    if not current_instance().is_default:
+        return  # the old folders belong to the default app's agents
+    legacy = base.legacy_runtimes_root() / NAME / safe_key(key)
+    if not legacy.is_dir():
+        return
+    try:
+        if not (home / "state.db").exists():
+            for name in ("state.db", "state.db-wal", "state.db-shm"):
+                if (legacy / name).is_file():
+                    shutil.copy2(legacy / name, home / name)
+            if (legacy / "sessions").is_dir():
+                shutil.copytree(legacy / "sessions", home / "sessions", dirs_exist_ok=True)
+    except OSError as exc:
+        log.warning("agent runtimes: Hermes sessions of %s not carried over: %s", key, exc)
+        return
+    shutil.rmtree(legacy, ignore_errors=True)
+    log.info("agent runtimes: moved Hermes agent %s into its profile", key)
+    parent = legacy.parent
+    try:
+        if parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError as exc:
+        log.debug("agent runtimes: legacy Hermes folder kept: %s", exc)
+
+
+class HermesRuntime:
+    name = NAME
+    label = LABEL
+
+    def __init__(self) -> None:
+        from dodaios.agent_runtimes.warm import WarmPool
+
+        self._detect = DetectCache()
+        self._slots = TurnSlots(NAME, lock_dir=lambda: base.runtimes_root() / "locks")
+        self._warm = WarmPool(NAME)
+        #: Home key -> digest of the launch its profile's gateway daemon
+        #: was started for (this app run only).
+        self._daemons: dict[str, str] = {}
+
+    # ----------------------------------------------------------- detection
+
+    def detect(self, *, refresh: bool = False, fast: bool = False) -> RuntimeStatus:
+        """Installed, version, ready. ``fast`` (a turn): an expired *ready*
+        answer is used and checked again in the background."""
+        if refresh:
+            self._detect.clear()
+        cached = self._detect.get()
+        if cached is not None:
+            return cached
+        if fast:
+            stale = self._detect.stale_ready(lambda: self.detect(refresh=True))
+            if stale is not None:
+                return stale
+        from dodaios.agent_runtimes.path_cleanup import clean_user_path_once
+
+        clean_user_path_once()
+        pin = versions.pin(NAME)
+        minimum = format_version(pin.minimum)
+        binary = _binary()
+        if binary is None:
+            return self._detect.put(
+                RuntimeStatus(
+                    NAME,
+                    LABEL,
+                    installed=False,
+                    minimum_version=minimum,
+                    problem="Hermes is not installed.",
+                    problem_kind="not_installed",
+                    install_hint=_install_hint(),
+                )
+            )
+        output = run_version([binary, "--version"])
+        version = parse_version(output)
+        if version is None:
+            return self._detect.put(
+                RuntimeStatus(
+                    NAME,
+                    LABEL,
+                    installed=True,
+                    minimum_version=minimum,
+                    problem="Hermes is installed but did not report its version.",
+                    problem_kind="no_version",
+                    install_hint=_install_hint(),
+                )
+            )
+        ready = version >= pin.minimum
+        return self._detect.put(
+            RuntimeStatus(
+                NAME,
+                LABEL,
+                installed=True,
+                version=format_version(version),
+                minimum_version=minimum,
+                ready=ready,
+                problem="" if ready else f"Hermes {minimum} or newer is needed. Update it.",
+                problem_kind="" if ready else "outdated",
+                install_hint=_install_hint(),
+                untested=ready and pin.tested is not None and version > pin.tested,
+                build=output.splitlines()[0].strip() if output else "",
+            )
+        )
+
+    def install_command(self, revision: str | None = None) -> list[str] | None:
+        """The official installer, at the pinned commit (or ``revision``, a rollback).
+
+        Without browser tools (a headless Chromium) or desktop control: Jarvis
+        agents use Jarvis' visible browser and never Hermes' computer use.
+        """
+        commit = revision or versions.pin(NAME).commit
+        if is_windows():
+            flags = "-SkipSetup -NonInteractive -SkipBrowser -SkipComputerUse"
+            if commit:
+                flags += f" -Commit {ps_quote(commit)}"
+            return windows_installer(
+                f"& ([scriptblock]::Create((Invoke-RestMethod {_INSTALL_URL_PS1}))) {flags}"
+            )
+        args = ["--skip-setup", "--non-interactive", "--skip-browser", "--skip-computer-use"]
+        if commit:
+            args += ["--commit", commit]
+        return posix_installer(_INSTALL_URL_SH, args, requires=("git",))
+
+    def update_command(self) -> list[str] | None:
+        """Update to the tested release: the installer at its pinned commit.
+
+        ``hermes update`` would go to upstream latest, which no canary has
+        seen; only a broken pins file falls back to it.
+        """
+        if versions.pin(NAME).commit:
+            return self.install_command()
+        binary = _binary()
+        return [binary, "update", "--yes"] if binary else None
+
+    def revision(self, status: RuntimeStatus) -> str:
+        """What a rollback reinstalls: the build's upstream commit."""
+        match = re.search(r"upstream ([0-9a-f]{7,40})|\.g([0-9a-f]{7,40})\b", status.build)
+        return (match.group(1) or match.group(2)) if match else ""
+
+    @property
+    def gate(self) -> Any:
+        return self._slots.gate
+
+    # ------------------------------------------------------------- prepare
+
+    def needs_prepare(self, status: RuntimeStatus) -> bool:
+        """Whether the shared root's environment was not yet built for this build."""
+        if not status.ready or not status.build:
+            return False
+        try:
+            done = (hermes_root() / ".jarvis-prepared").read_text(encoding="utf-8").strip()
+        except OSError:  # never prepared on this machine
+            return True
+        return done != status.build
+
+    def mark_prepared(self, status: RuntimeStatus) -> None:
+        if status.build:
+            write_if_changed(hermes_root() / ".jarvis-prepared", status.build + "\n")
+
+    def prepare_command(self) -> tuple[list[str], dict[str, str]] | None:
+        """Build the shared root's dependency environment ahead of the first turn.
+
+        ``hermes profile list`` passes through Hermes' launch preparation (a
+        version query skips it), which syncs the data root's environment once
+        per Hermes build; afterwards every agent's first turn starts at once.
+        """
+        binary = _binary()
+        if binary is None:
+            return None
+        home = profile_home(_SETUP_KEY)
+        return [binary, "profile", "list"], child_env({"HERMES_HOME": str(home)})
+
+    def busy(self) -> bool:
+        return self._slots.busy()
+
+    async def stop(self, agent_id: str | None = None) -> None:
+        """Stop the warm processes of ``agent_id`` (all when ``None``) and the
+        gateway daemons they ran on."""
+        keys = None if agent_id is None else {agent_id, f"{agent_id}~runs"}
+        await self._warm.stop(keys)
+        # A named agent's daemons go even when this app run never started
+        # them (one left by an earlier run lives on its own for minutes).
+        doomed = set(self._daemons) if keys is None else keys
+        for key in doomed:
+            self._daemons.pop(key, None)
+            home = hermes_root() / "profiles" / profile_name(key)
+            await asyncio.to_thread(_stop_profile_gateway, home)
+
+    # -------------------------------------------------------------- launch
+
+    def config_for(self, turn: RuntimeTurn) -> dict[str, Any]:
+        route = turn.route
+        provider: dict[str, Any] = {
+            "api": route.base_url,
+            "transport": route.transport,
+            "default_model": route.model,
+        }
+        model: dict[str, Any] = {
+            "provider": f"custom:{RUNTIME_PROVIDER_NAME}",
+            "default": route.model,
+            # Session restore rebuilds the agent from the stored endpoint and
+            # reads the key next to a matching ``model.base_url``.
+            "base_url": route.base_url,
+            "context_length": route.context_window,
+        }
+        if route.api_key:
+            provider["key_env"] = KEY_ENV_VAR
+        else:
+            # A keyless local server: Hermes' own placeholder, not a secret.
+            model["api_key"] = "no-key-required"
+        config: dict[str, Any] = {
+            "model": model,
+            "providers": {RUNTIME_PROVIDER_NAME: provider},
+            "terminal": {"cwd": str(turn.workspace)},
+            # Jarvis ends failed turns and retains the user's request. Do not
+            # stack Hermes retries, recovery cycles or paid fallback routes.
+            "agent": {
+                "api_max_retries": 1,
+                "auto_recovery_cycles": 0,
+                "disabled_toolsets": sorted(
+                    _ALWAYS_DISABLED | _disabled_toolsets(turn.denied_native)
+                ),
+            },
+            "fallback_model": None,
+            # Jarvis owns memory and skills on every runtime.
+            "memory": {
+                "memory_enabled": False,
+                "user_profile_enabled": False,
+                "nudge_interval": 0,
+            },
+            "skills": {"creation_nudge_interval": 0, "project_discovery": False},
+            "curator": {"enabled": False},
+            # Connected accounts can expose hundreds of tools. Keep their
+            # schemas out of every greeting; Hermes discovers and dispatches
+            # them through the same MCP server, including its approval gates.
+            "tools": {"tool_search": {"enabled": "on", "listing_max_tokens": 2000}},
+            "auxiliary": {
+                "background_review": {"enabled": False},
+                "title_generation": {"enabled": False},
+            },
+            # "manual" always asks over ACP; Jarvis answers it from the chat's
+            # stance (Bypass allows without a card, Plan refuses), so the file
+            # never depends on which session wrote it last. Never the "smart"
+            # guardian, which spends model calls of its own.
+            "approvals": {"mode": "manual"},
+            # Never put the data root on the user's PATH (POSIX; see prepare_root).
+            "cli": {"expose_on_path": False},
+            # Newer Hermes runs an ACP session in a gateway daemon that
+            # ``hermes acp`` starts. A profile the root's multiplexer serves
+            # reads its credentials from files only (the key stays off disk),
+            # so each agent gets its own daemon, started from its own
+            # process environment (see _stop_profile_gateway).
+            "gateway": {"standalone": True},
+        }
+        if turn.effort in _HERMES_EFFORTS:
+            # Hermes' ACP sessions resolve this per model (agent.reasoning_effort;
+            # "none" disables reasoning). No level = the model's own default.
+            config["agent"]["reasoning_effort"] = turn.effort
+        config_version = versions.pin(NAME).config_version
+        if config_version is not None:
+            # Without it Hermes reads the file as pre-version-12 and refuses to
+            # migrate it (logged on every Hermes update).
+            config["_config_version"] = config_version
+        return config
+
+    async def launch(self, turn: RuntimeTurn) -> RuntimeLaunch:
+        _refuse_claude_cli(turn)
+        status = await asyncio.to_thread(self.detect, fast=True)
+        if not status.ready:
+            raise RuntimeUnavailable(status.problem or "Hermes is not ready.")
+        binary = _binary()
+        if binary is None:
+            raise RuntimeUnavailable("Hermes is not installed.")
+        release = await self._slots.acquire(home_key(turn.agent_id, turn.session_id))
+        try:
+            launch = await self._launch(binary, turn, release)
+            if turn.warm:
+                launch.proc = await self._warm.lease(
+                    home_key(turn.agent_id, turn.session_id), *self._warm_spec(launch, turn)
+                )
+            return launch
+        except BaseException:
+            release()
+            raise
+
+    async def warm(
+        self, turn: RuntimeTurn, latest_resume: Callable[[], str | None] | None = None
+    ) -> bool:
+        """Start the agent's process and open its conversation before a message.
+
+        Spends no model call. Skipped unless the agent's turn slot is free
+        right now. ``latest_resume`` re-reads the chat's conversation once the
+        slot is held (a turn may have finished since ``turn`` was built).
+        """
+        if turn.route.transport == "claude_cli":
+            return False
+        status = await asyncio.to_thread(self.detect)
+        binary = _binary()
+        if not status.ready or binary is None or self.needs_prepare(status):
+            return False
+        key = home_key(turn.agent_id, turn.session_id)
+        try:
+            release = await self._slots.acquire(key, wait_s=_WARM_SLOT_WAIT_S)
+        except RuntimeUnavailable:
+            return False  # a turn (or another warm-up) has the agent right now
+        if latest_resume is not None:
+            turn.resume = latest_resume()
+        try:
+            launch = await self._launch(binary, turn, release)
+            return await self._warm.warm(key, *self._warm_spec(launch, turn))
+        finally:
+            release()
+
+    def _warm_spec(self, launch: RuntimeLaunch, turn: RuntimeTurn) -> tuple[Any, Any]:
+        from dodaios import __version__
+        from dodaios.agent_runtimes.acp import session_params
+        from dodaios.agent_runtimes.warm import SessionWant, WarmSpec, signature
+
+        spec = WarmSpec(
+            argv=launch.argv,
+            env=launch.env,
+            cwd=launch.cwd,
+            # Hermes reads its profile only at start: a changed one restarts.
+            signature=signature(
+                launch.argv, launch.env, str(launch.cwd),
+                self.config_for(turn), self._soul(turn),
+            ),
+            client_version=__version__,
+        )
+        want = SessionWant(
+            resume=launch.acp_resume,
+            params=session_params(str(launch.cwd), launch.mcp_servers),
+        )
+        return spec, want
+
+    async def _launch(
+        self, binary: str, turn: RuntimeTurn, release: Callable[[], None]
+    ) -> RuntimeLaunch:
+        from dodaios.agent_runtimes.warm import signature
+
+        home = await asyncio.to_thread(
+            profile_home, home_key(turn.agent_id, turn.session_id)
+        )
+        await asyncio.to_thread(self._write_profile, home, turn)
+        env = child_env(
+            {
+                "HERMES_HOME": str(home),
+                # Only the Jarvis server handed over per session; none from config.
+                "HERMES_ACP_SKIP_CONFIGURED_MCP": "1",
+                # The gateway daemons' host record stays in Dodaios' root: the
+                # person's own Hermes gateway never meets (or refuses) them.
+                "HERMES_GATEWAY_LOCK_DIR": str(
+                    private_dir(hermes_root() / "gateway-locks")
+                ),
+                **_TURN_ENV,
+                **turn.route.env(),
+                **_restore_key_aliases(turn.route.base_url, turn.route.api_key),
+            }
+        )
+        launch_key = home_key(turn.agent_id, turn.session_id)
+        served = signature(
+            binary, env, str(turn.workspace), self.config_for(turn), self._soul(turn)
+        )
+        if self._daemons.get(launch_key) != served:
+            # A daemon keeps the key, URL and profile it started with: one
+            # left by an earlier launch (or app run) would answer this turn
+            # with stale ones, so it goes first and ``hermes acp`` starts a
+            # fresh one from this environment.
+            await asyncio.to_thread(_stop_profile_gateway, home)
+            self._daemons[launch_key] = served
+        servers: list[McpServer] = []
+        if turn.mcp_url and turn.control_key:
+            from dodaios.agent_chat.dodaios_harness import HEADER_NAME
+            from dodaios.core.branding import MCP_TOOLS_SERVER_NAME
+
+            servers.append(
+                McpServer(
+                    name=MCP_TOOLS_SERVER_NAME,
+                    url=turn.mcp_url,
+                    headers={
+                        # Travels inside the ACP frame on stdin, never on argv.
+                        "Authorization": f"Bearer {turn.control_key}",
+                        HEADER_NAME: turn.session_id,
+                    },
+                )
+            )
+        return RuntimeLaunch(
+            argv=[binary, "acp"],
+            env=env,
+            cwd=turn.workspace,
+            mcp_servers=servers,
+            acp_resume=turn.resume,
+            release=release,
+        )
+
+    def _write_profile(self, home: Path, turn: RuntimeTurn) -> None:
+        from dodaios.agent_runtimes.tool_snapshot import refresh_tool_search_cache
+
+        refresh_tool_search_cache(home, turn.resume)
+        write_json_if_changed(home / "config.yaml", self.config_for(turn))
+        write_if_changed(home / "SOUL.md", self._soul(turn))
+
+    @staticmethod
+    def _soul(turn: RuntimeTurn) -> str:
+        return (
+            persona_text(turn.agent_name)
+            + "Dodaios MCP tools are available through tool_search, tool_describe and "
+            "tool_call. For a task that needs Dodaios or a connected account, use "
+            "tool_search with the service and action, read the returned schema, "
+            "then invoke its exact tool name through tool_call. Search before "
+            "concluding a capability is missing. For a greeting or ordinary "
+            "conversation, reply directly without searching for tools.\n"
+        )
+
+
+def _stop_profile_gateway(home: Path) -> bool:
+    """Stop the Hermes gateway daemon of one agent profile, if one runs.
+
+    Hermes builds after 0.21 run an ACP session in a gateway daemon that
+    ``hermes acp`` starts detached on first use and that outlives it (it ends
+    itself minutes after its last client). It keeps the environment it was
+    started with. Only the process recorded in the profile's ``gateway.pid``
+    with a Hermes ``gateway run`` command line, and its own children, are
+    stopped. Older builds never write that record: nothing to do.
+    """
+    path = home / "gateway.pid"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        pid = int(record["pid"] if isinstance(record, dict) else record)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        # No record (older builds, nothing started) or one Hermes is rewriting.
+        log.debug("agent runtimes: no Hermes gateway record in %s: %s", home.name, exc)
+        return False
+    import psutil
+
+    try:
+        proc = psutil.Process(pid)
+        cmdline = " ".join(proc.cmdline()).lower()
+        if not ("hermes" in cmdline and "gateway" in cmdline and "run" in cmdline):
+            return False  # the pid now belongs to another process
+        started = proc.create_time()
+        # Children by creation time too: a pid reused since cannot have a
+        # parent born after it.
+        doomed = [
+            child
+            for child in proc.children(recursive=True)
+            if child.create_time() >= started
+        ]
+        for victim in (*doomed, proc):
+            with contextlib.suppress(psutil.Error):
+                victim.kill()
+        psutil.wait_procs([*doomed, proc], timeout=10)
+    except psutil.Error as exc:
+        log.debug("agent runtimes: Hermes gateway record ignored: %s", exc)
+        return False
+    log.info("agent runtimes: stopped the Hermes gateway of profile %s", home.name)
+    return True
+
+
+def _refuse_claude_cli(turn: RuntimeTurn) -> None:
+    """Hermes cannot run an agent on the Claude subscription.
+
+    Its only route there is an experimental Hermes plugin that runs the
+    Claude CLI as its model provider; installing it changes the Hermes
+    install's own dependency environment and its catalog source moves between
+    Hermes releases, so Dodaios does not install it. The subscription is never
+    sent to Anthropic's HTTP API instead (billed as Extra Usage), and no API
+    key stands in for it.
+    """
+    if turn.route.transport == "claude_cli":
+        raise RuntimeUnavailable(
+            "Hermes cannot run on the Claude subscription. Run this agent on OpenClaw "
+            "or as a Dodaios agent, or switch it to an Anthropic API key in its settings. "
+            "No API key or Extra Usage was used."
+        )
+
+
+def _restore_key_aliases(base_url: str, api_key: str | None) -> dict[str, str]:
+    """The key again under the name Hermes' session restore looks for.
+
+    A reopened ACP session is rebuilt from the stored ``custom`` provider and
+    base URL, without the named provider's ``key_env``; that path reads
+    ``OPENAI_API_KEY`` / ``OPENROUTER_API_KEY`` for those hosts and
+    ``<VENDOR>_API_KEY`` derived from any other host. The process environment
+    holds only this agent's key, so the alias reaches nothing else. Without
+    it Jarvis still recovers (a fresh session with the transcript in front),
+    but Hermes' own context of the conversation would be lost.
+    """
+    if not api_key:
+        return {}
+    host = (urlsplit(base_url).hostname or "").lower()
+    if host in ("127.0.0.1", "localhost", "::1"):
+        # Jarvis' own model gateway: Hermes pairs OPENAI_API_KEY with exactly
+        # the OPENAI_BASE_URL it was issued for, and with no other host.
+        return {"OPENAI_BASE_URL": base_url, "OPENAI_API_KEY": api_key}
+    if not host or host[-1].isdigit() or "." not in host:
+        return {}
+    if host == "openai.com" or host.endswith(".openai.com"):
+        return {"OPENAI_API_KEY": api_key}
+    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
+        return {"OPENROUTER_API_KEY": api_key}
+    labels = [label for label in host.split(".") if label not in ("api", "www")]
+    if len(labels) < 2:
+        return {}
+    vendor = re.sub(r"[^A-Za-z0-9]", "_", labels[-2]).upper()
+    return {f"{vendor}_API_KEY": api_key}
+
+
+def _disabled_toolsets(denied: frozenset[str]) -> set[str]:
+    """Hermes toolsets an agent's Jarvis grants rule out."""
+    out: set[str] = set()
+    if "shell" in denied:
+        out.update({"terminal", "code_execution"})
+    if "web" in denied:
+        out.update({"web", "browser"})
+    return out

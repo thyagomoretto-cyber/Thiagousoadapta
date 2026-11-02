@@ -1,0 +1,415 @@
+"""Why a provider refused a Hermes / OpenClaw model call, in words a person can act on.
+
+A provider's HTTP status alone misleads: OpenAI answers an empty credit
+balance with 429 and OpenRouter with 402. Each of those reads as "rate
+limited, try again in 30 s" — and no retry will ever succeed. This module
+tells them apart (a Claude subscription never reaches a provider's HTTP API
+here: it runs through the official Claude CLI, ``model_map``):
+
+* **No credits / no quota** on a key -> 402 ``billing`` (a runtime does not
+  retry it; Hermes classifies 402 as billing and stops).
+* **Usage limit reached** (a plan's allowance, such as a subscription's or a
+  daily quota, is used up until it resets) -> 429 ``usage_limit``: never
+  "try again in 30 s", but when the allowance resets, if known, and another
+  connected model to use until then.
+* **Provider not reachable** (a local model server that is not running, no
+  network) -> 503 ``provider_unreachable``.
+* **Context too long** -> 400 ``context_length_exceeded`` with the words
+  "context length exceeded", which both runtimes read as "compress the
+  conversation and send it again".
+* **Took too long** (a read timeout while the model was still working) -> 504
+  ``timeout``, never "not reachable".
+* **Model not offered**, **tools not supported**, **tool schema refused** ->
+  404 ``model_not_found`` / 400 ``tools_unsupported`` / 400
+  ``invalid_tool_schema``: deterministic, so nothing retries them.
+
+Messages never copy the provider's response body; the body is only matched.
+:func:`describe` gives a bounded, redacted line for the log, so a failed
+turn can be diagnosed without reproducing it.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Final
+
+from dodaios.brain.tools_rejection import TOOLS_UNSUPPORTED_PHRASES, tools_rejection_hint
+
+log = logging.getLogger(__name__)
+
+#: Error codes providers use for an empty balance or a spent quota.
+_BILLING_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "insufficient_quota",
+        "insufficient_credits",
+        "billing_not_active",
+        "billing_hard_limit_reached",
+        "credit_balance_exhausted",
+        "payment_required",
+    }
+)
+
+#: Wording of the same, for providers that send no structured code. Matched in
+#: lower case. Gemini's "limit: 0" means the key has no quota at all for the
+#: model (free tier without access), which no wait fixes.
+_BILLING_PHRASES: Final[tuple[str, ...]] = (
+    "no credits",
+    "insufficient credits",
+    "insufficient balance",
+    "credit balance is too low",
+    "out of credits",
+    "add more credits",
+    "limit: 0,",
+)
+
+#: Codes and wording of a plan's spent allowance (a subscription's usage
+#: limit, a daily request quota): it comes back when the allowance resets,
+#: not after a short wait. Matched on a 429 or a status-less error only.
+_USAGE_LIMIT_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "usage_limit_reached",
+        "usage_limit_exceeded",
+        "subscription_sharing_usage_limit_exceeded",
+    }
+)
+_USAGE_LIMIT_PHRASES: Final[tuple[str, ...]] = (
+    "usage limit",
+    "usage_limit",
+    "allowance resets",
+    "requests per day",
+    "perday",
+    "daily limit",
+    "daily quota",
+)
+
+#: Transport failures, by class name across the SDKs (openai, anthropic,
+#: httpx): the name is the stable capability signal, a class import is not.
+#: A connect failure means nothing answered; it is checked before the
+#: timeouts below, because the SDKs wrap a connect timeout in their timeout
+#: class.
+_UNREACHABLE_ERRORS: Final[frozenset[str]] = frozenset(
+    {"APIConnectionError", "ConnectError", "ConnectTimeout"}
+)
+_CONNECT_ERRORS: Final[frozenset[str]] = frozenset({"ConnectError", "ConnectTimeout"})
+
+#: The model was reached and did not answer in time (a long thinking phase,
+#: a slow local prefill): worth another try, never "start the server".
+_TIMEOUT_ERRORS: Final[frozenset[str]] = frozenset(
+    {
+        "APITimeoutError",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "TimeoutException",
+        "TimeoutError",
+    }
+)
+
+#: A request longer than the model's context window, in each provider's
+#: words (OpenAI/OpenRouter/vLLM, Anthropic, Gemini, llama.cpp). Matched in
+#: lower case, on a 4xx or a status-less stream error only.
+_OVERFLOW_CODES: Final[frozenset[str]] = frozenset(
+    {"context_length_exceeded", "string_above_max_length", "request_too_large"}
+)
+_OVERFLOW_PHRASES: Final[tuple[str, ...]] = (
+    "context length",
+    "context_length",
+    "maximum context",
+    "context window",
+    "prompt is too long",
+    "input is too long",
+    "too many tokens",
+    "exceeds the maximum number of tokens",
+    "input token count",
+    "max_model_len",
+    "maximum allowed input length",
+    "reduce the length of the messages",
+)
+
+_MODEL_MISSING_CODES: Final[frozenset[str]] = frozenset({"model_not_found"})
+#: One list with the brains' tool-less retry (llama.cpp ``--jinja``, vLLM
+#: ``--enable-auto-tool-choice``, Ollama "does not support tools").
+_TOOLS_UNSUPPORTED_PHRASES: Final[tuple[str, ...]] = TOOLS_UNSUPPORTED_PHRASES
+_TOOL_SCHEMA_CODES: Final[frozenset[str]] = frozenset(
+    {"invalid_function_parameters", "invalid_tool_schema"}
+)
+_TOOL_SCHEMA_PHRASES: Final[tuple[str, ...]] = (
+    "invalid schema for function",
+    "input_schema",
+    "function_declarations",
+    "json schema is invalid",
+)
+
+#: Codes after which the Jarvis turn ends at once: no retry, compression or
+#: wait inside the runtime changes the answer (a rate limit carries the
+#: cooldown the person is told about). Every other failure goes back to the
+#: runtime, whose own retry and compression handle it.
+TERMINAL_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "billing",
+        "provider_auth",
+        "model_not_found",
+        "invalid_tool_schema",
+        "tools_unsupported",
+        "rate_limited",
+        "usage_limit",
+        "incomplete",
+    }
+)
+
+#: Key- and token-shaped strings masked in :func:`describe`.
+_SECRET_RE: Final = re.compile(
+    r"(sk-[A-Za-z0-9_\-]{6,}|AIza[0-9A-Za-z_\-]{10,}|jrg_[A-Za-z0-9_\-]{6,}"
+    r"|[Bb]earer\s+[A-Za-z0-9._\-]{10,}|eyJ[A-Za-z0-9._\-]{20,})"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Refusal:
+    """What the runtime is told: HTTP status, machine code, plain message."""
+
+    status: int
+    code: str
+    message: str
+
+
+class ProviderRefusal(Exception):
+    """A refusal already explained where its context was known (the login)."""
+
+    def __init__(self, refusal: Refusal) -> None:
+        super().__init__(refusal.message)
+        self.refusal = refusal
+
+
+def _status(exc: BaseException) -> int | None:
+    for value in (
+        getattr(exc, "status_code", None),
+        getattr(exc, "status", None),
+        # google-genai: ``code`` is the HTTP status, ``status`` its name.
+        getattr(exc, "code", None),
+        getattr(getattr(exc, "response", None), "status_code", None),
+    ):
+        if isinstance(value, int) and not isinstance(value, bool) and 100 <= value < 600:
+            return value
+    return None
+
+
+def _codes_and_text(exc: BaseException) -> tuple[set[str], str]:
+    """The structured error codes and the lower-cased text, for matching only."""
+    codes: set[str] = set()
+    body = getattr(exc, "body", None)
+    if body is None:
+        body = getattr(exc, "details", None)  # google-genai
+    error = body.get("error", body) if isinstance(body, dict) else None
+    for source in (exc, error if isinstance(error, dict) else None):
+        if source is None:
+            continue
+        for field in ("code", "type", "status"):
+            value = source.get(field) if isinstance(source, dict) else getattr(source, field, None)
+            if isinstance(value, str) and value:
+                codes.add(value.lower())
+    return codes, f"{exc} {body if body is not None else ''}".lower()
+
+
+def _chain(exc: BaseException) -> list[BaseException]:
+    seen: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in seen and len(seen) < 5:
+        seen.append(current)
+        current = current.__cause__ or current.__context__
+    return seen
+
+
+#: How the gateway's providers are named in a message (the id otherwise).
+_LABELS: Final[dict[str, str]] = {
+    "claude-api": "Anthropic",
+    "openai": "OpenAI",
+    "openai-codex": "The ChatGPT subscription",
+    "grok": "xAI (Grok)",
+    "openrouter": "OpenRouter",
+    "nvidia": "NVIDIA",
+    "gemini": "Google Gemini",
+    "vertex": "Google Vertex AI",
+    "ollama": "Ollama",
+    "local-openai": "The local model server",
+}
+
+
+def _label(provider: str) -> str:
+    return _LABELS.get(provider, provider)
+
+
+def provider_label(provider: str) -> str:
+    """How ``provider`` is named in a message a person reads."""
+    return _label(provider)
+
+
+def usage_limit_message(provider: str, reset_in: float | None = None) -> str:
+    """A spent allowance in words a person can act on.
+
+    ``reset_in`` is the seconds until the allowance resets when the provider
+    said so; the reset is then named as a UTC time (``resets at
+    2026-10-27T15:04:00Z``), which the chat shows in the person's own clock.
+    Never a short "try again in N s": waiting a moment does not help.
+    """
+    import datetime as _dt
+
+    head = (
+        f"{_label(provider)} reached its usage limit: the plan's allowance is used up "
+        "until it resets"
+    )
+    if reset_in is not None and reset_in > 0:
+        at = _dt.datetime.now(_dt.UTC) + _dt.timedelta(seconds=reset_in)
+        head += f" (it resets at {at.strftime('%Y-%m-%dT%H:%M:%SZ')})"
+    return (
+        f"{head}. Until then, choose another connected model in the agent's settings. "
+        "No fallback provider was called."
+    )
+
+
+def _class_names(exc: BaseException) -> set[str]:
+    return {cls.__name__ for err in _chain(exc) for cls in type(err).__mro__}
+
+
+def classify(provider: str, exc: BaseException, model: str = "") -> Refusal | None:
+    """The actionable refusal behind ``exc``, or ``None`` for an ordinary error."""
+    if isinstance(exc, ProviderRefusal):
+        return exc.refusal
+    status = _status(exc)
+    codes, text = _codes_and_text(exc)
+    if status == 402 or (
+        status in (400, 403, 429)
+        and (codes & _BILLING_CODES or any(phrase in text for phrase in _BILLING_PHRASES))
+    ):
+        return Refusal(
+            402,
+            "billing",
+            f"{_label(provider)} has no credits or quota left on this key, so retrying "
+            "will not help. Top it up with the provider, or choose another connected "
+            "model in the agent's settings.",
+        )
+    if status in (429, None) and (
+        codes & _USAGE_LIMIT_CODES or any(phrase in text for phrase in _USAGE_LIMIT_PHRASES)
+    ):
+        return Refusal(429, "usage_limit", usage_limit_message(provider))
+    if (status in (400, 413, 422) or status is None) and (
+        codes & _OVERFLOW_CODES or any(phrase in text for phrase in _OVERFLOW_PHRASES)
+    ):
+        return Refusal(
+            400,
+            "context_length_exceeded",
+            "Context length exceeded: the conversation is longer than "
+            f"{model or 'the model'}'s context window on {_label(provider)}. Compress "
+            "or shorten the conversation and send it again.",
+        )
+    # llama.cpp answered a tools request without ``--jinja`` with HTTP 500 in
+    # older builds; the phrases are specific enough to accept that status too.
+    if status in (400, 422, 500, None) and any(
+        phrase in text for phrase in _TOOLS_UNSUPPORTED_PHRASES
+    ):
+        return Refusal(
+            400,
+            "tools_unsupported",
+            f"{model or 'This model'} on {_label(provider)} cannot call tools, which the "
+            "agent needs. Choose a model with tool support in the agent's settings. "
+            f"{tools_rejection_hint(text) or ''}".rstrip(),
+        )
+    if status in (400, 422) and (
+        codes & _TOOL_SCHEMA_CODES or any(phrase in text for phrase in _TOOL_SCHEMA_PHRASES)
+    ):
+        return Refusal(
+            400,
+            "invalid_tool_schema",
+            f"{_label(provider)} refused one of the agent's tool definitions, so the "
+            "request cannot succeed as it is. Turn off the newest tool or MCP server, or "
+            "choose another model.",
+        )
+    if status == 404 or (status in (400, None) and codes & _MODEL_MISSING_CODES):
+        return Refusal(
+            404,
+            "model_not_found",
+            f"{_label(provider)} does not offer the model "
+            f"{model or 'selected for this agent'} (or its server address is wrong). "
+            "Choose another model in the agent's settings, or pull it first if it is a "
+            "local model.",
+        )
+    if status is None:
+        names = _class_names(exc)
+        if names & _CONNECT_ERRORS:
+            return _unreachable(provider)
+        if names & _TIMEOUT_ERRORS:
+            return Refusal(
+                504,
+                "timeout",
+                f"{_label(provider)} took too long to answer {model or 'this request'}. "
+                "Try again; a long request on a slow or busy model can take minutes.",
+            )
+        if names & _UNREACHABLE_ERRORS:
+            return _unreachable(provider)
+    return None
+
+
+def _unreachable(provider: str) -> Refusal:
+    return Refusal(
+        503,
+        "provider_unreachable",
+        f"{_label(provider)} is not reachable. If it is a model server on this "
+        "computer, start it; otherwise check the connection, or choose another "
+        "model in the agent's settings.",
+    )
+
+
+def gateway_refusal(provider: str, exc: BaseException, model: str = "") -> Refusal:
+    """Every provider failure as the status, code and message a runtime gets."""
+    found = classify(provider, exc, model)
+    if found is not None:
+        return found
+    status = _status(exc)
+    if status == 429:
+        return Refusal(429, "rate_limited", f"{_label(provider)} returned HTTP 429 (rate limit).")
+    if status in (401, 403):
+        return Refusal(
+            401,
+            "provider_auth",
+            f"{_label(provider)} refused the saved key. Check it in Settings → API keys.",
+        )
+    if status in (503, 529):
+        return Refusal(
+            503,
+            "provider_overloaded",
+            f"{_label(provider)} is overloaded right now (HTTP {status}). Try again shortly.",
+        )
+    if status is not None and 400 <= status < 500:
+        return Refusal(
+            400,
+            "invalid_request",
+            f"{_label(provider)} rejected the request (HTTP {status}, {type(exc).__name__}).",
+        )
+    return Refusal(502, "provider_error", f"{provider} could not answer ({type(exc).__name__}).")
+
+
+def is_terminal(code: str) -> bool:
+    """Whether a failure with ``code`` ends the Jarvis turn at once."""
+    return code in TERMINAL_CODES
+
+
+def describe(exc: BaseException, limit: int = 400) -> str:
+    """A one-line, bounded, redacted account of ``exc`` for the log.
+
+    Provider error messages name the parameter, code and limit that failed;
+    they do not echo the conversation. Anything shaped like a key or bearer
+    token is masked, and the line is cut at ``limit`` characters.
+    """
+    status = _status(exc)
+    codes, _text = _codes_and_text(exc)
+    message = _SECRET_RE.sub("[redacted]", " ".join(str(exc).split()))
+    if len(message) > limit:
+        message = message[:limit] + "…"
+    parts = [type(exc).__name__]
+    if status is not None:
+        parts.append(f"status={status}")
+    if codes:
+        parts.append("codes=" + ",".join(sorted(codes)[:4]))
+    return f"{' '.join(parts)}: {message}"

@@ -1,0 +1,46 @@
+DODAIOS vNEXT — RELATÓRIO DE INSTALAÇÃO
+Data: dom  1 nov 2026 11:21:05 -03
+Root detectado: /Users/thiagomoretto/.dodaios/dodaios
+Backup: /Users/thiagomoretto/.dodaios/backups/multiuser-20261101-112102
+
+INSTALADO:
+- Regras nativas globais: /Users/thiagomoretto/.dodaios/global/native_rules.json
+- Configuração multiusuário: /Users/thiagomoretto/.dodaios/global/multiuser.json
+- Perfis: /Users/thiagomoretto/.dodaios/profiles/thiago e /Users/thiagomoretto/.dodaios/profiles/mel
+- Administrador global exclusivo: thiago (Jarvis / Thiago)
+- Demais perfis restritos ao próprio usuário
+- Controle de perfis e permissões: /Users/thiagomoretto/.dodaios/bin/profilectl
+- Runtime auxiliar: /Users/thiagomoretto/.dodaios/multiuser_runtime.py
+- Seletor/launcher: /Users/thiagomoretto/.dodaios/bin/jarvis
+- App de abertura: /Users/thiagomoretto/Applications/JARVIS.app
+- Contrato de integração: /Users/thiagomoretto/.dodaios/global/integration_contract.json
+
+PRESERVADO:
+- API keys existentes
+- Ollama
+- Modelos locais
+- Nemotron
+- STT/TTS
+- Histórico existente
+- Integrações existentes
+- Código-fonte original do DodaiOS
+
+NÃO ATIVADO:
+- Nenhuma automação de agenciamento imobiliário.
+
+ALVO DE ABERTURA DETECTADO:
+open -a "DodaiOS"
+
+IMPORTANTE:
+Esta atualização instala e testa o núcleo multiusuário e o seletor sem fazer patch cego no
+código-fonte do DodaiOS. As variáveis de ambiente DODAIOS_PROFILE, DODAIOS_PROFILE_DIR,
+DODAIOS_NATIVE_RULES e DODAIOS_MULTIUSER são exportadas ao abrir pelo JARVIS.app.
+
+Para que o motor interno do DodaiOS misture automaticamente as regras nativas no system prompt,
+ele precisa possuir (ou receber) um ponto de integração que leia DODAIOS_NATIVE_RULES.
+Os candidatos encontrados na instalação foram registrados em:
+/Users/thiagomoretto/.dodaios/global/integration_contract.json
+
+Se o DodaiOS já lê essas variáveis/arquivos, o carregamento é imediato.
+Se não lê, o núcleo está preparado e o próximo patch deve ligar o system prompt ao runtime,
+usando os pontos reais encontrados no integration_contract.json em vez de alterar arquivos no escuro.

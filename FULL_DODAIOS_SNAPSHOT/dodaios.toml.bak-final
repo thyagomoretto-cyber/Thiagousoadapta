@@ -1,0 +1,207 @@
+﻿[ui]
+language = "pt"
+sound_effects = false
+
+[trigger]
+wake_word_enabled = true
+require_hey_prefix = false
+
+[trigger.wake_word]
+phrase = "Jarvis, vamos comeÃƒÆ’Ã‚Â§ar a trabalhar"
+engine = "stt_match"
+language = "pt"
+
+[jarvisbar]
+pos_x = 577
+pos_y = 735
+rel_x = 0.4996
+rel_y = 0.865
+
+[stt]
+provider = "nemotron-local"
+provider_user_selected = true
+model = "large-v3"
+language = "pt"
+
+[stt.models]
+faster-whisper = "base"
+[dictation]
+polish_precision = true
+
+[audio]
+output_device = "Alto-falantes (MacBook Air)"
+input_device = "Microfone (MacBook Air)"
+echo_cancellation = true
+
+[voice]
+mode = "pipeline"
+
+[tts]
+provider = "gemini"
+voice = "Zephyr"
+language_code = "pt-BR"
+speed = 0.7
+model = "gemini-3.1-flash-tts-preview"
+streaming = true
+voice_auto_switch = false
+allow_sapi5_fallback = false
+tts_fallback_disabled = true
+provider_fallback_disabled = true
+voice_rotation_disabled = true
+system_voice_fallback_disabled = true
+
+[brain]
+reply_language = "pt"
+primary = "local-openai"
+reasoning_effort = "none"
+think = false
+[brain.providers.ollama]
+model = "huihui_ai/qwen3.5-abliterated:4B"
+autostart = false
+
+[brain.providers.ollama.models."huihui_ai/qwen3.5-abliterated:4B"]
+num_ctx = 12288
+keep_alive = "15m"
+think = false
+
+[brain.providers.nvidia]
+model = "nvidia/nemotron-3.5-super-vl-120b-a12b"
+[brain.realtime]
+provider = "openai-live"
+model = "gpt-live-1"
+
+[brain.computer_use]
+provider = "openai"
+
+[brain.tool_model]
+provider = "local-openai"
+model = "qwen/qwen3.5-9b"
+fallback_provider = ""
+fallback_model = ""
+fallback_provider_2 = ""
+fallback_model_2 = ""
+[live]
+model = "gpt-live-1"
+voice = "gleam"
+backend_model = "gpt-5.5"
+reasoning_effort = "minimal"
+web_search = true
+instructions = ""
+backend_instructions = ""
+configured = true
+auth_mode = "api_key"
+subscription_account_id = "codex:default"
+subscription_voice = "cove"
+subscription_backend_model = "gpt-5.6-luna"
+subscription_reasoning_effort = "medium"
+
+[missions]
+paid_api_fallback = false
+
+[computer_use]
+announce_progress = true
+
+[regras_persistentes]
+versao = "1"
+criado_em = "2026-11-01"
+descricao = "Regras de funcionamento definidas pelo usuÃƒÆ’Ã‚Â¡rio e tratadas como configuraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o permanente do DodaiOS. Carregadas na inicializaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o e aplicadas antes de qualquer nova solicitaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+
+[regras_persistentes.executacao_direta]
+ativa = true
+descricao = "Executar tarefas diretamente em vez de apenas explicar como fazer."
+prioridade = "execucao_em_vez_de_explicacao"
+
+[regras_persistentes.recursos_autorizados]
+ativa = true
+descricao = "Utilizar todas as ferramentas, integraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes, scripts, terminal, arquivos, pastas, aplicativos e recursos do computador aos quais o DodaiOS jÃƒÆ’Ã‚Â¡ possui acesso autorizado."
+inclui = ["terminal", "shell", "python", "applescript", "arquivos", "apis_locais", "scripts", "ferramentas_instaladas"]
+
+[regras_persistentes.criacao_ferramentas_auxiliares]
+ativa = true
+descricao = "Criar ferramentas auxiliares especÃƒÆ’Ã‚Â­ficas quando necessÃƒÆ’Ã‚Â¡rio, sem destruir nem substituir componentes existentes desnecessariamente."
+
+[regras_persistentes.paridade_comandos]
+ativa = true
+descricao = "Tratar comandos recebidos por texto, ÃƒÆ’Ã‚Â¡udio e chamada de voz com a mesma forÃƒÆ’Ã‚Â§a e capacidade de execuÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+modos_equivalentes = ["texto", "audio", "chamada_voz"]
+
+[regras_persistentes.andamento_visivel]
+ativa = true
+descricao = "Exibir visualmente o andamento das tarefas durante a execuÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, atÃƒÆ’Ã‚Â© concluir, falhar ou ficar bloqueado."
+
+[regras_persistentes.status_tarefas]
+ativa = true
+valores_validos = ["RECEBIDO", "ANALISANDO", "EXECUTANDO", "TESTANDO", "CORRIGINDO", "CONCLUÃƒÆ’Ã‚ÂDO", "ERRO"]
+descricao = "Manter e atualizar status visÃƒÆ’Ã‚Â­vel das tarefas durante a execuÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+
+[regras_persistentes.persistencia]
+ativa = true
+descricao = "Essas regras sÃƒÆ’Ã‚Â£o configuraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o permanente do aplicativo e sobrevivem a fechar/abrir o DodaiOS, reiniciar o aplicativo, reiniciar o Mac, nova conversa, troca entre texto e voz, troca entre IA local e remota, e nova chamada de ÃƒÆ’Ã‚Â¡udio."
+carregamento_inicializacao = true
+aplicar_antes_de_processar = true
+
+[regras_persistentes.protecao_regras]
+ativa = true
+descricao = "NÃƒÆ’Ã‚Â£o apagar, substituir, resetar ou ignorar essas regras por causa de nova conversa, limpeza do histÃƒÆ’Ã‚Â³rico, troca de modelo, troca de agente, troca entre local e nuvem, atualizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o da interface ou reinicializaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+
+[regras_persistentes.novas_instrucoes]
+ativa = true
+descricao = "Novas instruÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes permanentes fornecidas pelo usuÃƒÆ’Ã‚Â¡rio sÃƒÆ’Ã‚Â£o incorporadas ao mesmo sistema persistente, de forma acumulativa, sem substituir ou apagar regras anteriores, salvo ordem explÃƒÆ’Ã‚Â­cita de alteraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o ou remoÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+
+[regras_persistentes.barreira_intervencao]
+ativa = true
+descricao = "Solicitar intervenÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do usuÃƒÆ’Ã‚Â¡rio somente quando houver uma barreira real que exija aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o humana, como senha, autenticaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, CAPTCHA, autorizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do macOS nÃƒÆ’Ã‚Â£o concedida, escolha entre opÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes realmente ambÃƒÆ’Ã‚Â­guas, ou aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o irreversÃƒÆ’Ã‚Â­vel/destrutiva relevante."
+
+[regras_persistentes.preservacao]
+ativa = true
+descricao = "Preservar tudo que jÃƒÆ’Ã‚Â¡ estiver funcionando. NÃƒÆ’Ã‚Â£o fazer atualizaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes gerais, reinstalaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes, git pull, substituiÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de configuraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes ou alteraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes fora do escopo da tarefa sem necessidade tÃƒÆ’Ã‚Â©cnica."
+
+[regras_persistentes.tratamento_falhas]
+ativa = true
+descricao = "Quando uma ferramenta, integraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, script, funÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, comando, automaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, API, processo ou recurso falhar durante a execuÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de uma tarefa, nÃƒÆ’Ã‚Â£o encerrar a tarefa simplesmente informando a falha. Iniciar automaticamente o processo de diagnÃƒÆ’Ã‚Â³stico e correÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o."
+sequencia = ["DETECTAR", "DIAGNOSTICAR", "PESQUISAR", "CORRIGIR", "TESTAR", "RETOMAR_A_TAREFA"]
+etapas = [
+  "Capturar o erro completo retornado pela ferramenta",
+  "Identificar ferramenta, aÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, mensagem de erro, cÃƒÆ’Ã‚Â³digo de erro, logs, dependÃƒÆ’Ã‚Âªncias, arquivos e configuraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes relacionados",
+  "Procurar a causa localmente: logs do DodaiOS, terminal, arquivos de configuraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, cÃƒÆ’Ã‚Â³digo-fonte, dependÃƒÆ’Ã‚Âªncias, processos ativos, permissÃƒÆ’Ã‚Âµes, portas, APIs, credenciais, versÃƒÆ’Ã‚Âµes instaladas",
+  "Se a causa nÃƒÆ’Ã‚Â£o ficar clara, pesquisar documentaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, issues, repositÃƒÆ’Ã‚Â³rios e fontes confiÃƒÆ’Ã‚Â¡veis na internet",
+  "Comparar o erro real com possÃƒÆ’Ã‚Â­veis soluÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes antes de alterar qualquer coisa",
+  "Corrigir a causa diretamente quando houver acesso tÃƒÆ’Ã‚Â©cnico suficiente",
+  "Se a primeira correÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o nÃƒÆ’Ã‚Â£o funcionar, analisar o novo erro e aplicar outra correÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o tecnicamente fundamentada",
+  "Evitar repetir exatamente a mesma tentativa que jÃƒÆ’Ã‚Â¡ falhou; nÃƒÆ’Ã‚Â£o entrar em loop infinito",
+  "Testar a ferramenta isoladamente, confirmar que voltou a funcionar, retomar automaticamente a tarefa original e concluÃƒÆ’Ã‚Â­-la",
+  "Salvar correÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes de falhas recorrentes de forma persistente com backup, menor alteraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o necessÃƒÆ’Ã‚Â¡ria e teste",
+  "Manter registro local tÃƒÆ’Ã‚Â©cnico das falhas resolvidas: ferramenta, erro, causa, correÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, resultado do teste",
+  "Mostrar andamento visÃƒÆ’Ã‚Â­vel durante a resoluÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o de falhas no chat e na interface de voz/chamada",
+  "Interromper e pedir intervenÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do usuÃƒÆ’Ã‚Â¡rio somente quando a falha depender de barreira real: senha, autenticaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o, CAPTCHA, permissÃƒÆ’Ã‚Â£o do macOS nÃƒÆ’Ã‚Â£o concedida, chave/API inexistente, serviÃƒÆ’Ã‚Â§o externo indisponÃƒÆ’Ã‚Â­vel ou decisÃƒÆ’Ã‚Â£o relevante nÃƒÆ’Ã‚Â£o inferÃƒÆ’Ã‚Â­vel com seguranÃƒÆ’Ã‚Â§a"
+]
+nao_parar_na_primeira_falha = true
+registro_falhas_resolvidas = true
+andamento_visivel_durante_falhas = true
+[brain.worker]
+provider = "local-openai"
+model = "qwen/qwen3.5-9b"
+fallback_provider = ""
+fallback_model = ""
+fallback_provider_2 = ""
+fallback_model_2 = ""
+
+[brain.router]
+provider = "local-openai"
+model = "qwen/qwen3.5-9b"
+fallback_provider = "nvidia"
+fallback_model = "nvidia/nemotron-3.5-super-vl-120b-a12b"
+
+
+
+[brain.providers.local-openai]
+model = "qwen/qwen3.5-9b"
+base_url = "http://127.0.0.1:1234"
+api_key = "lm-studio"
+enabled = true
+display_name = "Qwen Local (LM Studio)"
+
+
+
+
+

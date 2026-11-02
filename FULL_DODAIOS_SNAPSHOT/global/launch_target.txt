@@ -1,0 +1,1 @@
+cd "$HOME/.dodaios" && exec "$HOME/.dodaios/.venv/bin/python" -m dodaios --foreground

@@ -1,0 +1,97 @@
+[ui]
+language = "pt"
+sound_effects = false
+
+[trigger]
+wake_word_enabled = true
+require_hey_prefix = false
+
+[trigger.wake_word]
+phrase = "Jarvis, vamos começar a trabalhar"
+engine = "stt_match"
+language = "pt"
+
+[jarvisbar]
+pos_x = 1000
+pos_y = 547
+rel_x = 0.8658
+rel_y = 0.6344
+
+[stt]
+provider = "nemotron-local"
+provider_user_selected = true
+model = "large-v3"
+language = "pt"
+
+[stt.models]
+faster-whisper = "base"
+[dictation]
+polish_precision = true
+
+[audio]
+output_device = "Alto-falantes (MacBook Air)"
+input_device = "Microfone (MacBook Air)"
+echo_cancellation = true
+
+[voice]
+mode = "pipeline"
+
+[tts]
+provider = "gemini"
+voice = "Zephyr"
+language_code = "pt-BR"
+speed = 0.7
+model = "gemini-3.1-flash-tts-preview"
+streaming = true
+voice_auto_switch = false
+allow_sapi5_fallback = false
+tts_fallback_disabled = true
+provider_fallback_disabled = true
+voice_rotation_disabled = true
+system_voice_fallback_disabled = true
+
+[brain]
+reply_language = "pt"
+primary = "openai"
+
+[brain.providers.ollama]
+model = "huihui_ai/qwen3.5-abliterated:4B"
+autostart = false
+
+[brain.providers.ollama.models."huihui_ai/qwen3.5-abliterated:4B"]
+num_ctx = 12288
+keep_alive = "15m"
+think = false
+
+[brain.providers.nvidia]
+model = "nvidia/nemotron-3.5-super-vl-120b-a12b"
+[brain.worker]
+provider = "gemini"
+model = ""
+
+[brain.realtime]
+provider = "openai-live"
+model = "gpt-live-1"
+
+[brain.computer_use]
+provider = "openai"
+[live]
+model = "gpt-live-1"
+voice = "gleam"
+backend_model = "gpt-5.5"
+reasoning_effort = "minimal"
+web_search = true
+instructions = ""
+backend_instructions = ""
+configured = true
+auth_mode = "api_key"
+subscription_account_id = "codex:default"
+subscription_voice = "cove"
+subscription_backend_model = "gpt-5.6-luna"
+subscription_reasoning_effort = "medium"
+
+[missions]
+paid_api_fallback = false
+
+[computer_use]
+announce_progress = true

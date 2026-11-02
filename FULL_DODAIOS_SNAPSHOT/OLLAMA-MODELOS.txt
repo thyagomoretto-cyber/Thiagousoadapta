@@ -1,0 +1,4 @@
+NAME                                                       ID              SIZE      MODIFIED   
+huihui_ai-qwen3.5-abliterated-4B-jarvis-f0cfb9dd:latest    4d96268d8737    3.3 GB    2 days ago    
+huihui_ai-qwen3.5-abliterated-4B-jarvis-f0966e86:latest    ba9e15a3ebe5    3.3 GB    2 days ago    
+huihui_ai/qwen3.5-abliterated:4B                           9acbd90c2645    3.3 GB    2 days ago    

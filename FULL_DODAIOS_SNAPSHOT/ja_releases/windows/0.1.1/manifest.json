@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "product": "JA",
+  "platform": "windows",
+  "version": "0.1.1",
+  "category": "core_global",
+  "distribution": "global",
+  "policy": {
+    "backup_before_apply": true,
+    "healthcheck_after_apply": true,
+    "rollback_on_failure": true,
+    "admin_machine_validation_required": true
+  },
+  "components": {
+    "qwen_runner": true,
+    "global_rules": true,
+    "self_healing": true,
+    "window_controls": true,
+    "restart_frontend": true,
+    "restart_guard": true,
+    "loopback_origin": true,
+    "change_classification_policy": true,
+    "admin_update_policy": true
+  }
+}

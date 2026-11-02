@@ -1,0 +1,18 @@
+JARVIS — LAYOUT DE ENTRADA VISUAL
+Data: dom  1 nov 2026 12:43:03 -03
+
+ARQUIVOS ALTERADOS:
+- /Users/thiagomoretto/.dodaios/bin/jarvis_selector.py
+- /Users/thiagomoretto/.dodaios/bin/jarvis
+
+BACKUP:
+- /Users/thiagomoretto/.dodaios/backups/layout-entrada-20261101-124303
+
+RESULTADO:
+- Seletor visual com tema escuro
+- Cartões para usuários existentes
+- Botão para criar novo usuário
+- Clique direto no cartão abre o perfil (sem botão "Abrir")
+- Mantido fallback por osascript caso a interface visual falhe
+- Nenhuma automação de agenciamento foi ativada
+- APIs, Ollama, modelos, STT/TTS e permissões foram preservados

@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "enabled": true,
+  "credentials_scope": "global",
+  "default_profile": "thiago",
+  "administrator_profile": "thiago",
+  "administrator_display_name": "Jarvis / Thiago",
+  "only_administrator_can_manage_other_profiles": true,
+  "non_admin_scope": "own_profile_only",
+  "server_role_future": "windows_backend",
+  "mac_role": "interface_and_local_agent",
+  "agenciamento_automation_enabled": false,
+  "only_administrator_can_manage_updates": true
+}

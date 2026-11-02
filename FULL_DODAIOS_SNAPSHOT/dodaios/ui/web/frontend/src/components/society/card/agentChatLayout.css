@@ -1,0 +1,13 @@
+/*
+ * The Agents frame's grid lives in `agentSection.css` (`.as-shell`); its
+ * column widths come from `resolveShellLayout` as an inline template. What
+ * remains here is the workspace container the section measures against.
+ */
+.agent-card-workspace {
+  container: agent-card / inline-size;
+}
+
+.agent-chat-layout-options {
+  min-width: 0;
+  min-height: 0;
+}

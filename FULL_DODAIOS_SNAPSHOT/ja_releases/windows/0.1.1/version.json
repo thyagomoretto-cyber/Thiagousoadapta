@@ -1,0 +1,13 @@
+{
+  "product": "JA",
+  "platform": "windows",
+  "channel": "stable",
+  "version": "0.1.1",
+  "previous_version": "0.1.0",
+  "category": "core_global",
+  "published_at": null,
+  "prepared_at": "2026-11-02T19:22:01.245754+00:00",
+  "update_format": "powershell",
+  "manifest": "manifest.json",
+  "update_script": "update.ps1"
+}

@@ -1,0 +1,194 @@
+{
+  "schema": 1,
+  "policy": {
+    "successful_fix_becomes_persistent": true,
+    "backup_before_change": true,
+    "validate_after_change": true,
+    "reapply_on_startup": true,
+    "reapply_daily": true,
+    "do_not_silently_remove_working_fix": true,
+    "structural_fix_requires_patch_manager": true
+  },
+  "fixes": [
+    {
+      "id": "dodaios_single_instance_windows",
+      "description": "Impede DodaiOS duplicado pelo Python global; somente venv oficial pode rodar.",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_patches\\enforce_single_instance.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\dodaios_single_instance_windows\\enforce_single_instance.py",
+      "sha256": "faf9db1b56b9d7e817e8bc9fab108b3560564f4e37ecbf25c6091b26dd0c9b54",
+      "registered_at": "2026-11-02T19:39:45.292904+00:00",
+      "enabled": false,
+      "status": "validated"
+    },
+    {
+      "id": "windows_venv_relaunch",
+      "description": "Reinicializacao do DodaiOS permanece dentro da venv oficial.",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\web\\launcher.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\windows_venv_relaunch\\launcher.py",
+      "sha256": "1b62b19ec8cbb556cae190c3e53c09f56025ad2a9f0c5bb4ad4b235a057d5374",
+      "registered_at": "2026-11-02T19:44:46.034838+00:00",
+      "enabled": false,
+      "status": "validated"
+    },
+    {
+      "id": "frontend_unicode_regex_fix",
+      "description": "Corrige regex Unicode corrompido no bundle principal do frontend",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\web\\dist\\assets\\index-DSsJHycP.js",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\frontend_unicode_regex_fix\\index-DSsJHycP.js",
+      "sha256": "5b4ea3872acbc764c2e93499ead77512d8376671f19ea7e9c4cfa64f795e2390",
+      "registered_at": "2026-11-02T20:02:15.376846+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "profiles_fast_local_path",
+      "description": "Perfis do JA sempre carregam de ~/.dodaios/profiles para evitar demora ao abrir usuario",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\core\\config.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\profiles_fast_local_path\\config.py",
+      "sha256": "1d9d0ba16326d7cb2a3771bbc0523c74a01879df93bfa28ba92e8a80c9949cb0",
+      "registered_at": "2026-11-02T20:05:26.717747+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "fast_user_login_checks_off",
+      "description": "Desativa verificacoes pesadas na entrada do usuario para manter login rapido",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios.toml",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\fast_user_login_checks_off\\dodaios.toml",
+      "sha256": "1d33bd3e6633dedcf21f6ded0ce0b85f3959d709f6cf93e813704d586ff89fdf",
+      "registered_at": "2026-11-02T20:10:04.856009+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "webview_fast_profile_launcher",
+      "description": "Launcher do DodaiOS usa perfil WebView persistente em ~/.dodaios/webview",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\web\\launcher.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\webview_fast_profile_launcher\\launcher.py",
+      "sha256": "4844281ba015a275259b831df627b5a237a0287840288ccb74f177ca93fd9cd7",
+      "registered_at": "2026-11-02T20:12:37.782390+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "webview_fast_profile_music_host",
+      "description": "Music player host usa perfil WebView persistente em ~/.dodaios/webview",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\platform\\music_player_host.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\webview_fast_profile_music_host\\music_player_host.py",
+      "sha256": "9a754e8811c3870a3750a6b2af5984be4682b0bdff4848eba982cbcf8f435a42",
+      "registered_at": "2026-11-02T20:12:37.829398+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_profiles_junction",
+      "description": "Multiuser usa ~/.dodaios/profiles via junction de site-packages e active_profile.json",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\active_profile.json",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_profiles_junction\\active_profile.json",
+      "sha256": "6fc54d8b18a889f048a16b31dba282e2a0db6e29a3e1906b379ae59542bc4bee",
+      "registered_at": "2026-11-02T20:16:07.252995+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_instant_onselected",
+      "description": "Selecao de usuario entra imediatamente no AppShell sem reload ou restart",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\components\\UserSelectorGate.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_instant_onselected\\UserSelectorGate.tsx",
+      "sha256": "46c4421b0df363f03c502af8bb52e3c616c8b2fa3d66e7182c709610a24be9e1",
+      "registered_at": "2026-11-02T20:19:13.237817+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_appshell_gate",
+      "description": "App usa seletor interno e AppShell na mesma janela",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\App.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_appshell_gate\\App.tsx",
+      "sha256": "6700a1d05d92f491ada43326e84542e6dd8dc1106d09db45388790bc2eef3d7b",
+      "registered_at": "2026-11-02T20:19:13.280323+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "ja_login_progressivo_final",
+      "description": "Login validado: entra imediatamente e termina carregamento da interface em segundo plano",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\components\\UserSelectorGate.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\ja_login_progressivo_final\\UserSelectorGate.tsx",
+      "sha256": "b7ab4957ffd710939413dab0dc51d2c15c11543b3f7f7333547cc86fdf849585",
+      "registered_at": "2026-11-02T20:37:41.669622+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "windows_native_buttons",
+      "description": "Janela principal com minimizar, maximizar e fechar nativos do Windows",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\desktop_app.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\windows_native_buttons\\desktop_app.py",
+      "sha256": "bd008dbce8428de334f0286f6c2189d24d090fce1f4f84ceef1f49477ce70f08",
+      "registered_at": "2026-11-02T20:40:33.305398+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "restart_button_settings_route",
+      "description": "Botao Reinicio usa /api/settings/restart-app sem window.location.reload",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\components\\RestartDodaiOSButton.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\restart_button_settings_route\\RestartDodaiOSButton.tsx",
+      "sha256": "aae4b7a22521da7c260c69cd25412e2ccd92d74d8957223b6926ea55357fd809",
+      "registered_at": "2026-11-02T20:40:33.358906+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "windows_native_buttons_final",
+      "description": "Janela principal usa minimizar maximizar e fechar nativos do Windows",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\desktop_app.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\windows_native_buttons_final\\desktop_app.py",
+      "sha256": "3ac43a2b77eb6b8a2a13a3b115ceb545838fb2d9363dd434f26c2d21cf2ada55",
+      "registered_at": "2026-11-02T21:06:56.429383+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_restart_backend_fast",
+      "description": "Reinicio corrigido no backend sem recompilar ou substituir frontend baseline",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\web\\multiuser_routes.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_restart_backend_fast\\multiuser_routes.py",
+      "sha256": "386efd1714a1fdc451df9de6d3f0aeb6f9e2c1fc312029bbcf0a1552fa7eb162",
+      "registered_at": "2026-11-02T20:43:42.110307+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_session_no_second_selector",
+      "description": "Usuario escolhido permanece na sessao durante reload/remount, impedindo segundo seletor",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\App.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_session_no_second_selector\\App.tsx",
+      "sha256": "3e647c337d52a0e769a59fdcee3c41da33912fabb951ee747a651a2f675fda3f",
+      "registered_at": "2026-11-02T20:45:11.181823+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "multiuser_no_second_selector_final",
+      "description": "Usuario escolhido permanece ativo durante remontagem do frontend",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\dodaios\\ui\\web\\frontend\\src\\components\\UserSelectorGate.tsx",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\multiuser_no_second_selector_final\\UserSelectorGate.tsx",
+      "sha256": "9b7963686c6f383b82f08f770af878c24e1eb14d3c56abbe259f48b9095ab52c",
+      "registered_at": "2026-11-02T21:03:21.431962+00:00",
+      "enabled": true,
+      "status": "validated"
+    },
+    {
+      "id": "windows_native_buttons_complete",
+      "description": "Janela principal com moldura nativa do Windows e sem frame customizado sobre ela",
+      "target": "C:\\Users\\ME Arquitetura\\.dodaios\\.venv\\Lib\\site-packages\\dodaios\\ui\\desktop_app.py",
+      "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\windows_native_buttons_complete\\desktop_app.py",
+      "sha256": "c5548619eef0ff4d566e0ee46e8768b35598fd23be8e831cbb06b1233d092f38",
+      "registered_at": "2026-11-02T21:14:23.258564+00:00",
+      "enabled": true,
+      "status": "validated"
+    }
+  ]
+}

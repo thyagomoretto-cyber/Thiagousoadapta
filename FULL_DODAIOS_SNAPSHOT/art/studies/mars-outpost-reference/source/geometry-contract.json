@@ -1,0 +1,12 @@
+﻿{
+  "colliders": [
+    {
+      "shape": "plateau",
+      "footprint": [[0,0],[10,0],[10,10],[0,10]]
+    }
+  ],
+  "anchors": [
+    {"id": "bridge-outpost-end", "position": [0,0,0]},
+    {"id": "bridge-colony-end", "position": [10,0,0]}
+  ]
+}

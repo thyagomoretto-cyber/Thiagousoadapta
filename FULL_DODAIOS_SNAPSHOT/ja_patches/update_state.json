@@ -1,0 +1,9 @@
+{
+  "checked_at": "2026-11-02T19:04:18.227720+00:00",
+  "installed_version": "unknown",
+  "check": {
+    "method": "none",
+    "status": "NO_UPDATE_SOURCE",
+    "message": "Nenhuma fonte automatica de atualizacao foi detectada. O sistema continuara verificando diariamente."
+  }
+}

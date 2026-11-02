@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "last_apply": "2026-11-02T16:22:01",
+  "results": {
+    "qwen_runner": true,
+    "window_controls": true,
+    "global_rules": true,
+    "self_healing": true,
+    "restart_frontend": true,
+    "restart_guard": true,
+    "loopback_origin": true,
+    "python_validation": true
+  }
+}

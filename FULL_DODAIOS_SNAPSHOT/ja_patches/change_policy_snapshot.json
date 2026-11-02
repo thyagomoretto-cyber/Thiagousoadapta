@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "name": "JA Change Classification Policy",
+  "categories": {
+    "core_global": {
+      "description": "Mudanca estrutural do produto JA fora de Empresas.",
+      "distribution": "global",
+      "publish_update": true,
+      "examples": [
+        "interface principal",
+        "usuarios e perfis",
+        "agentes",
+        "ferramentas",
+        "integracoes globais",
+        "backend",
+        "voz",
+        "performance",
+        "regras globais",
+        "sistema de atualizacao",
+        "seguranca e permissoes"
+      ]
+    },
+    "companies_structural": {
+      "description": "Mudanca estrutural no modulo Empresas que altera a experiencia ou funcionamento para todas as empresas.",
+      "distribution": "global",
+      "publish_update": true,
+      "examples": [
+        "visualizacao do predio",
+        "forma de exibir funcionarios",
+        "forma de exibir gerentes",
+        "andares",
+        "cards",
+        "navegacao do modulo Empresas",
+        "animacoes",
+        "layout estrutural",
+        "comportamento geral do modulo Empresas"
+      ]
+    },
+    "company_specific": {
+      "description": "Mudanca de conteudo, dados, configuracao ou automacao exclusiva de uma empresa.",
+      "distribution": "company_only",
+      "publish_update": false,
+      "examples": [
+        "cadastro de funcionarios de uma empresa",
+        "regras internas de uma empresa",
+        "automacoes exclusivas",
+        "dados proprios",
+        "integracoes especificas",
+        "configuracoes particulares"
+      ]
+    }
+  },
+  "decision_rule": {
+    "product_change": "core_global",
+    "companies_module_structural_change": "companies_structural",
+    "company_content_or_configuration_change": "company_specific"
+  },
+  "release_policy": {
+    "test_on_admin_machine_first": true,
+    "publish_only_after_validation": true,
+    "windows_and_macos_separate_channels": true,
+    "structural_changes_must_reach_all_computers": true,
+    "company_specific_changes_must_not_become_global_updates": true
+  }
+}

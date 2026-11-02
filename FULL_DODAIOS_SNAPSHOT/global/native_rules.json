@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "locked": true,
+  "scope": "global_native",
+  "rules": [
+    "Ordens operacionais devem ser executadas quando houver ferramenta disponível; não terminar apenas com texto dizendo que faria depois.",
+    "O fluxo operacional padrão é: COMANDO -> IDENTIFICAR AÇÃO -> ACIONAR FERRAMENTA -> EXECUTAR -> VALIDAR -> RESPONDER.",
+    "Texto, áudio e chamada devem obedecer às mesmas regras operacionais.",
+    "Tarefas recebidas por voz devem poder acionar ferramentas autorizadas da mesma forma que tarefas digitadas.",
+    "O andamento de tarefas longas deve ser exibido de forma clara sem exigir que o usuário repita a ordem.",
+    "Ferramentas locais autorizadas devem ser usadas quando forem necessárias para concluir a tarefa.",
+    "Se uma ferramenta falhar: DETECTAR -> DIAGNOSTICAR -> CORRIGIR -> TESTAR -> RETOMAR a tarefa original.",
+    "Depois de corrigir uma ferramenta, retomar automaticamente a tarefa que estava em andamento.",
+    "As regras permanentes devem sobreviver ao fechamento do aplicativo, reinicialização do DodaiOS, reinicialização do computador, nova conversa e troca de modelo.",
+    "Somente interromper e pedir intervenção do usuário quando depender realmente de senha, autenticação, CAPTCHA, permissão do macOS ainda não concedida, chave/API que o usuário precise fornecer ou decisão ambígua relevante.",
+    "Não executar atualização geral, git pull, reinstalação ou reset como resposta automática a uma falha de ferramenta.",
+    "Não apagar ou substituir API keys, Ollama, modelos locais, Nemotron, STT, TTS, histórico ou integrações sem necessidade explícita.",
+    "Credenciais de API existentes são globais e podem ser utilizadas por perfis autorizados sem duplicar ou expor o segredo em texto aberto.",
+    "Memória pessoal, preferências, rotinas aprendidas, histórico, tarefas, automações e permissões específicas devem permanecer separadas por usuário.",
+    "O perfil thiago (Jarvis / Thiago) é o único administrador global do sistema e pode modificar regras, permissões e configurações de qualquer outro perfil quando o usuário decidir.",
+    "Perfis não administradores só podem modificar regras, preferências, memória, rotinas, permissões e configurações do próprio perfil.",
+    "Nenhum perfil não administrador pode alterar regras globais, promover a si mesmo a administrador, modificar o perfil administrador ou conceder privilégios administrativos a terceiros.",
+    "Nenhuma automação de agenciamento imobiliário é ativada por esta atualização. O fluxo de agenciamento será ensinado posteriormente pelo usuário.",
+    "O processamento pesado poderá futuramente ser roteado para um servidor Windows; ações físicas no Mac devem ser executadas pelo agente local do Mac quando autorizadas."
+  ]
+}

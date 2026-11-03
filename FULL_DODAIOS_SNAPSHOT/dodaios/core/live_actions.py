@@ -20,11 +20,56 @@ _APP_FOLDERS: Final[tuple[Path, ...]] = (
 )
 _BROWSER: Final[str] = "Google Chrome"
 _DOMAIN = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,}(?:/\S*)?)", re.I)
-_OPEN_VERB = re.compile(r"^(?:por favor |agora |entao )*(?:abra|abre|abrir)\s+(?:o |a |os |as )?(.+)$")
+_OPEN_VERB = re.compile(r"^(?:por favor |agora |entao |depois |e )*(?:abra|abre|abrir)\s+(?:o |a |os |as )?(.+)$")
 _GO_VERB = re.compile(
     r"^(?:por favor |agora |entao )*(?:entre|entra|entrar|acesse|acessa|acessar|va|vai|ir|abra|abre|abrir)\s+"
     r"(?:(?:no|na|em|para|pro|pra|ao|o|a)\s+)*(?:link|site|pagina|endereco|url)\s*(?:(?:do|da|de)\s+)?(.+)$"
 )
+
+
+_POLITE = r"^(?:por favor |agora |entao |depois |e )*"
+_CLICK = re.compile(
+    _POLITE + r"(?:clique|clica|clicar|aperte|aperta|apertar|pressione|selecione|escolha)\s+"
+    r"(?:(?:em|no|na|nos|nas|sobre|o|a|os|as)\s+)*"
+    r"(?:(?:botao|link|aba|menu|opcao|campo|icone|item)\s+)?(?:(?:do|da|de)\s+)?(.+)$"
+)
+_HERE = re.compile(_POLITE + r"(?:clique|clica|clicar)\s+(?:aqui|neste lugar|nesse lugar|onde esta o mouse)$")
+_TYPE = re.compile(r"^(?:por favor |agora |entao |depois |e )*(?:digite|digita|digitar|escreva|escreve|escrever)\s+(.+)$", re.I)
+_KEY = re.compile(_POLITE + r"(?:aperte|aperta|apertar|pressione|tecle)\s+(?:a\s+tecla\s+|o\s+)?(enter|tab|esc|espaco|apagar|baixo|cima|esquerda|direita)$")
+_SCROLL = re.compile(_POLITE + r"(?:role|rola|rolar|desca|suba|desce|sobe)\b.*?(baixo|cima)?$")
+_APP_ALIASES: Final[dict[str, str]] = {"crome": "chrome", "cromo": "chrome", "gugou chrome": "google chrome"}
+
+
+def _screen_step(text: str, folded: str) -> dict[str, Any] | None:
+    from dodaios.core import screen_control as screen
+
+    if _HERE.match(folded):
+        x, y = screen.mouse_position()
+        label = screen.nearest_text(x, y, screen.read_screen())
+        screen.click_at(x, y)
+        return {"done": True, "step": f'Clicar em "{label or "ponto indicado"}"'}
+    key = _KEY.match(folded)
+    if key:
+        screen.press_key(key.group(1))
+        return {"done": True, "step": f"Apertar {key.group(1)}"}
+    typed = _TYPE.match(text.strip().rstrip("."))
+    if typed:
+        screen.type_text(typed.group(1))
+        return {"done": True, "step": f'Digitar "{typed.group(1)}"'}
+    scrolled = _SCROLL.match(folded)
+    if scrolled:
+        direction = scrolled.group(1) or ("cima" if "sub" in folded or "sobe" in folded else "baixo")
+        screen.scroll(direction)
+        return {"done": True, "step": f"Rolar para {direction}"}
+    click = _CLICK.match(folded)
+    if click:
+        target = click.group(1).strip()
+        point = screen.find_text(target, screen.read_screen())
+        if point is None:
+            return {"done": True, "failed": f'Não encontrei "{target}" na tela. Aponte o mouse e diga: clique aqui.'}
+        screen.click_at(*point)
+        return {"done": True, "step": f'Clicar em "{target}"'}
+    return None
 
 
 def _fold(text: str) -> str:
@@ -64,6 +109,7 @@ def _installed_apps() -> dict[str, str]:
 
 def _find_app(name: str) -> str | None:
     wanted = _fold(name)
+    wanted = _APP_ALIASES.get(wanted, wanted)
     apps = _installed_apps()
     if wanted in apps:
         return apps[wanted]
@@ -106,4 +152,4 @@ def act(text: str, pending_link: str = "") -> dict[str, Any]:
         if app:
             _open("-a", app)
             return {"done": True, "step": f"Abrir o aplicativo {app}"}
-    return {"done": False}
+    return _screen_step(text, folded) or {"done": False}

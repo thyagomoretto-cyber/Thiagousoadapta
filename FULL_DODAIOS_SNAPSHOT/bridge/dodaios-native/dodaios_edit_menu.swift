@@ -1,4 +1,5 @@
 import Cocoa
+import WebKit
 
 // Sem um menu Editar, o macOS nao entrega Cmd+C, Cmd+V e afins ao WKWebView.
 @MainActor
@@ -33,6 +34,33 @@ private func dodaiosAddEditMenu() {
     NSApp.mainMenu = bar
 }
 
+// Mantem o microfone e o painel vivos quando outra janela fica na frente.
+private var dodaiosActivity: NSObjectProtocol?
+
+private func dodaiosWebView(in view: NSView?) -> WKWebView? {
+    guard let view else { return nil }
+    if let web = view as? WKWebView { return web }
+    for child in view.subviews {
+        if let web = dodaiosWebView(in: child) { return web }
+    }
+    return nil
+}
+
+@MainActor
+private func dodaiosKeepAliveInBackground() {
+    dodaiosActivity = ProcessInfo.processInfo.beginActivity(
+        options: [.userInitiated, .latencyCritical],
+        reason: "Ensino por voz"
+    )
+    let setter = Selector(("_setPageVisibilityBasedProcessSuppressionEnabled:"))
+    for window in NSApp.windows {
+        if let preferences = dodaiosWebView(in: window.contentView)?.configuration.preferences,
+           preferences.responds(to: setter) {
+            preferences.perform(setter, with: nil)
+        }
+    }
+}
+
 func installDodaiosEditMenu() {
     NotificationCenter.default.addObserver(
         forName: NSApplication.didFinishLaunchingNotification,
@@ -42,6 +70,7 @@ func installDodaiosEditMenu() {
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 dodaiosAddEditMenu()
+                dodaiosKeepAliveInBackground()
             }
         }
     }

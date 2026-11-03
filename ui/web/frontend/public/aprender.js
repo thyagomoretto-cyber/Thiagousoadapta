@@ -262,7 +262,7 @@
   const SPEECH_LEVEL = 0.015;
   const END_SILENCE_S = 1.3;
   const MAX_SPEECH_S = 30;
-  const FINISH_WORDS = /^\W*(terminar|encerrar|finalizar|pode parar)\b/i;
+  const FINISH_WORDS = /^\W*(finalizar aprendizado|finalizar o aprendizado|terminar aprendizado|encerrar aprendizado)\b/i;
 
   // Ouve uma fala inteira: comeca na voz e termina no silencio.
   function toSixteenK(samples, rate) {
@@ -351,6 +351,11 @@
 
   async function runLiveStep(teach, text) {
     const result = await api("/api/company-voice/act", { method: "POST", body: { text, pendingLink: teach.pendingLink || "" } });
+    if (result.failed) {
+      teach.log.push({ who: "Você", text }, { who: "Ele", text: result.failed });
+      await say(teach, result.failed);
+      return;
+    }
     if (result.done) {
       teach.pendingLink = "";
       teach.log.push({ who: "Você", text }, { who: "Ele", text: `Feito: ${result.step}` });
@@ -394,27 +399,44 @@
     teach.running = false;
   }
 
+  async function watchClicks(teach) {
+    let seen = 0;
+    while (teach.live && state.teach === teach) {
+      await new Promise((done) => setTimeout(done, 1500));
+      const steps = (await api(`/api/company-voice/observar/passos?desde=${seen}`).catch(() => ({ passos: [] }))).passos;
+      for (const step of steps) {
+        seen += 1;
+        teach.log.push({ who: "Observei", text: step });
+        teach.learned.push({ kind: "PASSO", text: step });
+      }
+      if (steps.length) { await saveLearned(); render(); }
+    }
+  }
+
   async function teachByVoice() {
     const teach = state.teach;
     teach.live = true;
     teach.audio = new AudioContext();
     teach.queue = [];
+    await api("/api/company-voice/observar/iniciar", { method: "POST", body: {} }).catch(() => null);
+    watchClicks(teach);
     try {
     while (state.teach === teach && teach.live) {
-      setStatus(teach, teach.working ? `Ouvindo enquanto executa: ${teach.working}` : "Ouvindo. Fale o próximo passo, ou diga terminar.");
+      setStatus(teach, teach.working ? `Ouvindo enquanto executa: ${teach.working}` : "Ouvindo e olhando sua tela. Diga finalizar aprendizado para encerrar.");
       const audio = await listen(teach);
       if (!audio || !teach.live) break;
       const text = (await transcribe(audio)).trim();
       if (text.length < 3) continue;
       if (FINISH_WORDS.test(text)) {
         teach.log.push({ who: "Você", text });
-        state.notice = "Ensino encerrado. Tudo já está registrado na habilidade.";
+        state.notice = "Aprendizado finalizado. Tudo já está registrado na habilidade.";
         break;
       }
       teach.queue.push(text);
       runQueue(teach);
     }
     } finally {
+      await api("/api/company-voice/observar/parar", { method: "POST", body: {} }).catch(() => null);
       teach.live = false;
       teach.status = "";
       if (teach.stopListening) teach.stopListening();
@@ -448,7 +470,7 @@
       ? button("Parar de ouvir", stopTeachByVoice, true)
       : button("Ensinar por voz", () => guarded(teachByVoice), true);
     return [row([button("← Sair do ensino", () => { if (teach.live) stopTeachByVoice(); state.teach = null; render(); }), voice]),
-      el("p", { textContent: teach.status || "Fale normalmente. Ele executa ao vivo e continua ouvindo até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
+      el("p", { textContent: teach.status || "Fale ou clique você mesmo. Ele executa, observa e aprende até você dizer finalizar aprendizado.", style: { fontSize: "12px", color: colors.muted } }),
       ...(teach.live ? [meter()] : []),
       ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
       ...(learned.length ? [title("Já registrado nesta conversa"), ...learned] : [])];

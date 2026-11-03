@@ -132,6 +132,32 @@ def act_on_step(body: LiveStep) -> dict:
         raise HTTPException(status_code=500, detail=f"Nao consegui abrir: {exc}") from exc
 
 
+@voice_router.post("/observar/{action}")
+def observe_clicks(action: str) -> dict:
+    """Liga ou desliga o aprendizado pelos cliques do dono."""
+    from dodaios.core.screen_control import OBSERVER
+
+    try:
+        OBSERVER.start() if action == "iniciar" else OBSERVER.stop()
+    except Exception as exc:  # noqa: BLE001 — o ensino continua sem observar
+        return {"ok": False, "detail": str(exc)[:200]}
+    return {"ok": True}
+
+
+@voice_router.get("/observar/passos")
+def observed_steps(desde: int = 0) -> dict:
+    from dodaios.core.screen_control import OBSERVER
+
+    return {"passos": OBSERVER.steps_after(desde)}
+
+
+@voice_router.get("/permissoes")
+def screen_permissions() -> dict:
+    from dodaios.core.screen_control import permissions
+
+    return permissions()
+
+
 @voice_router.post("/transcribe")
 async def transcribe_teaching(request: Request) -> dict:
     """Transcreve uma fala do ensino com o mesmo motor de voz do app."""

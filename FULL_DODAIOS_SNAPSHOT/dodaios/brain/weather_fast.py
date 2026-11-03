@@ -30,10 +30,13 @@ _REJECT_RE = re.compile(
     r"mudanca|historia|por que|porque|pesquis\w*|site|noticia\w*|graus de)\b"
 )
 _PLACE_RE = re.compile(
-    r"\b(?:em|no|na|para|pra)\s+([a-z][a-z' -]{2,40}?)"
+    r"\b(?:em|no|na|para|pra|de|do|da)\s+([a-z][a-z' -]{2,40}?)"
     r"(?:\s+(?:hoje|agora|amanha|nesse momento|neste momento))?$"
 )
-_NOT_PLACE = {"casa", "minha casa", "minha cidade", "aqui", "ai", "la", "geral"}
+_NOT_PLACE = {
+    "casa", "minha casa", "minha cidade", "aqui", "ai", "la", "geral",
+    "hoje", "agora", "amanha", "ontem", "manha", "tarde", "noite", "semana", "tempo",
+}
 _ALIASES = {"gravatem": "Gravatai"}
 # Cidades proximas, para quando a voz erra uma letra ("cachorinha") e o Open-Meteo
 # nao encontra nada. So entram depois que a busca normal falhou.
@@ -86,7 +89,7 @@ def _normalize(text: str) -> str:
     folded = unicodedata.normalize("NFKD", text or "")
     folded = "".join(char for char in folded if not unicodedata.combining(char))
     folded = re.sub(r"[,;/]", " ", folded)
-    return re.sub(r"\s+", " ", folded.lower().strip(" \t\n?!.:"))
+    return re.sub(r"\s+", " ", folded.lower().strip(" \t\n?!.:\\/"))
 
 
 def _split_state(place: str) -> tuple[str, str | None]:
@@ -154,20 +157,23 @@ def _pick(
     else:
         home = [item for item in options if item.get("admin1") == _HOME_STATE]
         options = home or options
+    # Sem estado pedido vence o lugar maior: Genebra e a cidade suica, nao um
+    # povoado brasileiro de mesmo nome.
     return max(options, key=lambda item: item.get("population") or 0)
 
 
 async def _lookup(client: Any, place: str, strict: bool) -> dict[str, Any] | None:
     city, state = _split_state(place)
+    merged: list[dict[str, Any]] = []
     for extra in ({"countryCode": "BR"}, {}):
         response = await client.get(
             _GEOCODE_URL,
             params={"name": city, "count": 10, "language": "pt", "format": "json", **extra},
         )
-        results = (response.json() or {}).get("results") or []
-        chosen = _pick(results, city, state, strict) if results else None
-        if chosen is not None:
-            return chosen
+        merged += (response.json() or {}).get("results") or []
+    chosen = _pick(merged, city, state, strict) if merged else None
+    if chosen is not None:
+        return chosen
     close = difflib.get_close_matches(_normalize(city), [_normalize(c) for c in _REGION_CITIES], n=1, cutoff=0.8)
     if close and close[0] != _normalize(city):
         return await _lookup(client, close[0], strict)

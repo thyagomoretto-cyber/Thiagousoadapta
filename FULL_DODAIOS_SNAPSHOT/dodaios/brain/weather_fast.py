@@ -7,12 +7,16 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import unicodedata
 from typing import Any
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT_S = 3.0
+_FOLLOWUP_S = 180.0
+_HOME_STATE = "Rio Grande do Sul"
+_last_answer_at = 0.0
 
 _TOPIC_RE = re.compile(
     r"\b(temperatura|clima|previsao(?: do tempo)?|quantos graus|o tempo|tempo|"
@@ -27,10 +31,34 @@ _PLACE_RE = re.compile(
     r"(?:\s+(?:hoje|agora|amanha|nesse momento|neste momento))?$"
 )
 _NOT_PLACE = {"casa", "minha casa", "minha cidade", "aqui", "ai", "la", "geral"}
-_ALIASES = {"gravatem": "Gravatai", "gravatai rs": "Gravatai"}
+_ALIASES = {"gravatem": "Gravatai"}
+_NOT_FOLLOWUP = {
+    "ok", "obrigado", "obrigada", "valeu", "sim", "nao", "legal", "certo", "beleza",
+    "qual", "como", "quando", "onde", "porque", "quero", "faz", "abre", "abra",
+}
+_STATES = {
+    "acre": "Acre", "ac": "Acre", "alagoas": "Alagoas", "al": "Alagoas",
+    "amapa": "Amapá", "ap": "Amapá", "amazonas": "Amazonas", "am": "Amazonas",
+    "bahia": "Bahia", "ba": "Bahia", "ceara": "Ceará", "ce": "Ceará",
+    "distrito federal": "Distrito Federal", "df": "Distrito Federal",
+    "espirito santo": "Espírito Santo", "es": "Espírito Santo",
+    "goias": "Goiás", "go": "Goiás", "maranhao": "Maranhão", "ma": "Maranhão",
+    "mato grosso do sul": "Mato Grosso do Sul", "ms": "Mato Grosso do Sul",
+    "mato grosso": "Mato Grosso", "mt": "Mato Grosso",
+    "minas gerais": "Minas Gerais", "mg": "Minas Gerais",
+    "para": "Pará", "pa": "Pará", "paraiba": "Paraíba", "pb": "Paraíba",
+    "parana": "Paraná", "pr": "Paraná", "pernambuco": "Pernambuco", "pe": "Pernambuco",
+    "piaui": "Piauí", "pi": "Piauí", "rio de janeiro": "Rio de Janeiro", "rj": "Rio de Janeiro",
+    "rio grande do norte": "Rio Grande do Norte", "rn": "Rio Grande do Norte",
+    "rio grande do sul": "Rio Grande do Sul", "rs": "Rio Grande do Sul",
+    "rondonia": "Rondônia", "ro": "Rondônia", "roraima": "Roraima", "rr": "Roraima",
+    "santa catarina": "Santa Catarina", "sc": "Santa Catarina",
+    "sao paulo": "São Paulo", "sp": "São Paulo", "sergipe": "Sergipe", "se": "Sergipe",
+    "tocantins": "Tocantins", "to": "Tocantins",
+}
 
 _CONDITIONS = {
-    0: "céu limpo", 1: "céu quase limpo", 2: "parcialmente nublado", 3: "nublado",
+    0: "céu limpo", 1: "céu quase limpo", 2: "céu parcialmente nublado", 3: "céu nublado",
     45: "neblina", 48: "neblina", 51: "garoa fraca", 53: "garoa", 55: "garoa forte",
     56: "garoa congelante", 57: "garoa congelante", 61: "chuva fraca", 63: "chuva",
     65: "chuva forte", 66: "chuva congelante", 67: "chuva congelante",
@@ -44,7 +72,33 @@ _CONDITIONS = {
 def _normalize(text: str) -> str:
     folded = unicodedata.normalize("NFKD", text or "")
     folded = "".join(char for char in folded if not unicodedata.combining(char))
-    return re.sub(r"\s+", " ", folded.lower().strip(" \t\n?!.,;:"))
+    folded = re.sub(r"[,;/]", " ", folded)
+    return re.sub(r"\s+", " ", folded.lower().strip(" \t\n?!.:"))
+
+
+def _split_state(place: str) -> tuple[str, str | None]:
+    """Separa ``cachoeirinha rs`` em cidade e estado."""
+    for name in sorted(_STATES, key=len, reverse=True):
+        if place.endswith(f" {name}"):
+            city = place[: -len(name)].strip()
+            if city.endswith(" do") or city.endswith(" de"):
+                continue
+            return city, _STATES[name]
+    return place, None
+
+
+def _match_followup(normalized: str) -> tuple[str, bool] | None:
+    """Aceita so o nome do lugar logo depois de uma resposta de clima."""
+    if time.monotonic() - _last_answer_at > _FOLLOWUP_S:
+        return None
+    words = normalized.split()
+    if not 1 <= len(words) <= 7 or not re.fullmatch(r"[a-z' -]+", normalized):
+        return None
+    if words[0] in ("em", "no", "na"):
+        words = words[1:]
+    if not words or set(words) & _NOT_FOLLOWUP:
+        return None
+    return " ".join(words), False
 
 
 def match_weather_question(text: str) -> tuple[str, bool] | None:
@@ -53,7 +107,7 @@ def match_weather_question(text: str) -> tuple[str, bool] | None:
     if not normalized or len(normalized.split()) > 12 or _REJECT_RE.search(normalized):
         return None
     if not _TOPIC_RE.search(normalized):
-        return None
+        return _match_followup(normalized)
     match = _PLACE_RE.search(normalized)
     if match is None:
         return None
@@ -63,15 +117,31 @@ def match_weather_question(text: str) -> tuple[str, bool] | None:
     return _ALIASES.get(place, place), "amanha" in normalized
 
 
+def _pick(results: list[dict[str, Any]], city: str, state: str | None) -> dict[str, Any] | None:
+    exact = [item for item in results if _normalize(item.get("name") or "") == _normalize(city)]
+    options = exact or results
+    if state:
+        same_state = [item for item in options if item.get("admin1") == state]
+        if not same_state:
+            return None
+        options = same_state
+    else:
+        home = [item for item in options if item.get("admin1") == _HOME_STATE]
+        options = home or options
+    return max(options, key=lambda item: item.get("population") or 0)
+
+
 async def _lookup(client: Any, place: str) -> dict[str, Any] | None:
+    city, state = _split_state(place)
     for extra in ({"countryCode": "BR"}, {}):
         response = await client.get(
             _GEOCODE_URL,
-            params={"name": place, "count": 5, "language": "pt", "format": "json", **extra},
+            params={"name": city, "count": 10, "language": "pt", "format": "json", **extra},
         )
         results = (response.json() or {}).get("results") or []
-        if results:
-            return max(results, key=lambda item: item.get("population") or 0)
+        chosen = _pick(results, city, state) if results else None
+        if chosen is not None:
+            return chosen
     return None
 
 
@@ -131,7 +201,11 @@ async def answer_weather_question(text: str, client: Any | None = None) -> str |
                 "timezone": "auto",
             },
         )
-        return _sentence(city, response.json() or {}, tomorrow)
+        reply = _sentence(city, response.json() or {}, tomorrow)
+        if reply is not None:
+            global _last_answer_at
+            _last_answer_at = time.monotonic()
+        return reply
 
     try:
         async with asyncio.timeout(_TIMEOUT_S):

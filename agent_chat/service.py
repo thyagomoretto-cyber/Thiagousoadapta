@@ -1581,7 +1581,8 @@ class AgentChatService:
             # Regras persistentes: globais + perfil ativo.
             # Voz e texto convergem neste serviço, portanto usam a mesma base.
             from dodaios.core.user_rules import prepend_rules
-            plain_system = prepend_rules(plain_system)
+            from dodaios.core.company_skills import prepend_skills
+            plain_system = prepend_skills(prepend_rules(plain_system), text)
             handle = TurnHandle(
                 session=session,
                 turn_id=turn_id,

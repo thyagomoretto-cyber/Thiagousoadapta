@@ -1,0 +1,173 @@
+// Modo de aprendizado: painel simples, sem etapa de build, dentro do Empresas.
+(function () {
+  "use strict";
+  const WORKSPACE = '[data-testid="companies-workspace"]';
+  const state = { companyId: null, companies: [], skills: [], skill: null, error: "" };
+  let panel = null;
+
+  async function api(path, options) {
+    const init = options ? { method: options.method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(options.body) } : undefined;
+    const response = await fetch(path, init);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `Erro ${response.status}`);
+    return payload;
+  }
+
+  function el(tag, props, children) {
+    const node = document.createElement(tag);
+    Object.entries(props || {}).forEach(([key, value]) => {
+      if (key === "style") Object.assign(node.style, value);
+      else if (key === "onclick") node.addEventListener("click", value);
+      else if (key === "onchange") node.addEventListener("change", value);
+      else node[key] = value;
+    });
+    (children || []).forEach((child) => { if (child) node.append(child); });
+    return node;
+  }
+
+  const colors = { text: "hsl(var(--foreground))", muted: "hsl(var(--muted-foreground))", line: "hsl(var(--border))", bg: "hsl(var(--background))", card: "hsl(var(--card))", main: "hsl(var(--primary))", onMain: "hsl(var(--primary-foreground))" };
+  const fieldStyle = { width: "100%", boxSizing: "border-box", padding: "8px 10px", border: `1px solid ${colors.line}`, borderRadius: "8px", background: colors.card, color: colors.text, font: "inherit", fontSize: "13px" };
+  const button = (label, onclick, primary) => el("button", { type: "button", textContent: label, onclick, style: { padding: "7px 12px", borderRadius: "8px", border: `1px solid ${primary ? colors.main : colors.line}`, background: primary ? colors.main : "transparent", color: primary ? colors.onMain : colors.text, font: "inherit", fontSize: "12px", cursor: "pointer" } });
+  const label = (text) => el("div", { textContent: text, style: { margin: "14px 0 5px", fontSize: "12px", color: colors.muted } });
+  const title = (text) => el("h3", { textContent: text, style: { margin: "20px 0 6px", fontSize: "14px", fontWeight: "600" } });
+  const row = (children) => el("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "10px" } }, children);
+  const input = (value, name) => el("input", { value: value || "", name, style: fieldStyle });
+  const area = (value, name, rows) => el("textarea", { value: value || "", name, rows: rows || 3, style: { ...fieldStyle, resize: "vertical" } });
+  const lines = (node) => node.value.split("\n").map((line) => line.trim()).filter(Boolean);
+
+  function members(kindFilter) {
+    const company = state.companies.find((item) => item.id === state.companyId);
+    return (company ? company.members : []).filter(kindFilter);
+  }
+
+  function memberSelect(value, name, kindFilter) {
+    const options = [el("option", { value: "", textContent: "A definir" })];
+    members(kindFilter).forEach((member) => options.push(el("option", { value: member.id, textContent: `${member.name} · ${member.role}` })));
+    const select = el("select", { name, style: fieldStyle }, options);
+    select.value = value || "";
+    return select;
+  }
+
+  async function guarded(action) {
+    state.error = "";
+    try { await action(); } catch (error) { state.error = error.message || "Falha"; }
+    render();
+  }
+
+  async function loadCompany(companyId) {
+    state.companyId = companyId;
+    state.skill = null;
+    state.skills = companyId ? (await api(`/api/companies/${encodeURIComponent(companyId)}/skills`)).skills : [];
+  }
+
+  const skillsUrl = (suffix) => `/api/companies/${encodeURIComponent(state.companyId)}/skills${suffix || ""}`;
+
+  async function saved(skill) {
+    state.skill = skill;
+    state.skills = (await api(skillsUrl())).skills;
+  }
+
+  function createSkill() {
+    const name = window.prompt("Nome da tarefa a ensinar");
+    if (name && name.trim()) guarded(async () => saved(await api(skillsUrl(), { method: "POST", body: { name: name.trim() } })));
+  }
+
+  function listView() {
+    const company = el("select", { value: state.companyId || "", style: fieldStyle, onchange: (event) => guarded(() => loadCompany(event.target.value)) },
+      state.companies.map((item) => el("option", { value: item.id, textContent: item.name })));
+    company.value = state.companyId || "";
+    const items = state.skills.map((skill) => el("button", {
+      type: "button", onclick: () => { state.skill = skill; render(); },
+      style: { display: "block", width: "100%", textAlign: "left", padding: "10px 12px", marginTop: "8px", borderRadius: "10px", border: `1px solid ${colors.line}`, background: colors.card, color: colors.text, font: "inherit", cursor: "pointer" },
+    }, [
+      el("div", { textContent: skill.name, style: { fontSize: "13px", fontWeight: "600" } }),
+      el("div", { textContent: `${skill.examples.length} de 10 exemplos · ${skill.rules.length} regras · versão ${skill.version}`, style: { marginTop: "3px", fontSize: "12px", color: colors.muted } }),
+    ]));
+    return [label("Empresa"), company, row([button("Criar nova habilidade", createSkill, true)]), title("Habilidades ensinadas"),
+      ...(items.length ? items : [el("p", { textContent: "Nenhuma habilidade ainda. Crie a primeira e ensine passo a passo.", style: { fontSize: "13px", color: colors.muted } })])];
+  }
+
+  function skillView(skill) {
+    const form = {
+      name: input(skill.name, "name"), whenToUse: area(skill.whenToUse, "whenToUse"),
+      steps: area(skill.steps.join("\n"), "steps", 6), rules: area(skill.rules.join("\n"), "rules", 4),
+      exceptions: area(skill.exceptions.join("\n"), "exceptions"), validation: area(skill.validation.join("\n"), "validation"),
+      managerId: memberSelect(skill.managerId, "managerId", (member) => member.kind === "gerente"),
+      specialistId: memberSelect(skill.specialistId, "specialistId", (member) => member.kind !== "gerente"),
+    };
+    const save = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}`), { method: "PATCH", body: {
+      name: form.name.value, whenToUse: form.whenToUse.value, managerId: form.managerId.value, specialistId: form.specialistId.value,
+      steps: lines(form.steps), rules: lines(form.rules), exceptions: lines(form.exceptions), validation: lines(form.validation),
+    } })));
+    const exampleText = area("", "situation"); const exampleResult = area("", "outcome", 2);
+    const addExample = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}/examples`), { method: "POST", body: { situation: exampleText.value, outcome: exampleResult.value } })));
+    const correctionText = area("", "correction", 2);
+    const addCorrection = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}/corrections`), { method: "POST", body: { text: correctionText.value } })));
+    const test = () => guarded(async () => {
+      const task = window.prompt(`Descreva um caso para testar "${skill.name}"`);
+      if (!task) return;
+      const prompt = `Execute a habilidade "${skill.name}" da empresa ${skill.company}: ${task}. Valide o resultado e relate o que fez.`;
+      const dispatch = async (confirmed) => {
+        const response = await fetch("/api/missions/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, language: "pt", confirmed }) });
+        const payload = await response.json().catch(() => ({}));
+        if (response.status === 409 && payload.requires_confirm && !confirmed && window.confirm(`Ação sensível detectada (${payload.matched_text || "ação"}). Autorizar o teste?`)) return dispatch(true);
+        if (!response.ok) throw new Error(payload.detail || `Erro ${response.status}`);
+        return payload;
+      };
+      await dispatch(false);
+      state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
+    });
+    const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
+    return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Testar habilidade", test)]),
+      el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
+      label("Nome"), form.name, label("Quando usar"), form.whenToUse, label("Passos, um por linha"), form.steps,
+      label("Regras, uma por linha"), form.rules, label("Exceções, uma por linha"), form.exceptions, label("Como validar, um por linha"), form.validation,
+      label("Gerente responsável"), form.managerId, label("Funcionário especialista"), form.specialistId, row([button("Salvar", save, true)]),
+      title("Adicionar exemplo"), label("Situação"), exampleText, label("Resultado esperado"), exampleResult, row([button("Adicionar exemplo", addExample)]),
+      ...skill.examples.slice(-5).reverse().map((item) => el("div", { textContent: `• ${item.situation}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })),
+      title("Corrigir"), label("O que deve mudar"), correctionText, row([button("Registrar correção", addCorrection)]),
+      ...skill.corrections.slice(-5).reverse().map((item) => el("div", { textContent: `• ${item.text}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })),
+      title("Histórico de aprendizado"), ...history];
+  }
+
+  function render() {
+    if (!panel) return;
+    const body = state.skill ? skillView(state.skill) : listView();
+    panel.replaceChildren(
+      el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
+        el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),
+        button("Fechar", closePanel),
+      ]),
+      ...(state.error ? [el("div", { role: "alert", textContent: state.error, style: { marginTop: "10px", color: "hsl(var(--destructive))", fontSize: "12px" } })] : []),
+      ...(state.notice ? [el("div", { textContent: state.notice, style: { marginTop: "10px", color: colors.muted, fontSize: "12px" } })] : []),
+      ...body,
+    );
+    state.notice = "";
+  }
+
+  function closePanel() { if (panel) panel.remove(); panel = null; }
+
+  function openPanel(host) {
+    panel = el("section", { "ariaLabel": "Aprender nova tarefa", style: { position: "absolute", top: "0", right: "0", bottom: "0", zIndex: "10", width: "min(480px, 100%)", boxSizing: "border-box", padding: "20px", overflowY: "auto", borderLeft: `1px solid ${colors.line}`, background: colors.bg, color: colors.text, fontSize: "13px" } });
+    panel.dataset.testid = "aprender-painel";
+    host.append(panel);
+    guarded(async () => {
+      const data = await api("/api/companies");
+      state.companies = data.companies || [];
+      await loadCompany(data.activeCompanyId || (state.companies[0] && state.companies[0].id) || null);
+    });
+  }
+
+  function attach() {
+    const host = document.querySelector(WORKSPACE);
+    if (!host) { closePanel(); return; }
+    if (host.querySelector('[data-testid="aprender-botao"]')) return;
+    const launch = button("Aprender nova tarefa", () => { if (!panel) openPanel(host); }, true);
+    launch.dataset.testid = "aprender-botao";
+    Object.assign(launch.style, { position: "absolute", right: "20px", bottom: "20px", zIndex: "9" });
+    host.append(launch);
+  }
+
+  new MutationObserver(attach).observe(document.documentElement, { childList: true, subtree: true });
+  attach();
+})();

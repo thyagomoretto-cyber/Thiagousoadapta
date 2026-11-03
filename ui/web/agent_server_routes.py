@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .companies_routes import router as companies_router
 from .company_files_routes import router as company_files_router
+from .company_skills_routes import router as company_skills_router
 
 # Keep this router at the API root so lightweight feature routers can be mounted
 # without touching the very large central server module. Existing agent-server
@@ -15,6 +16,7 @@ from .company_files_routes import router as company_files_router
 router = APIRouter(tags=["agent-server"])
 router.include_router(companies_router)
 router.include_router(company_files_router)
+router.include_router(company_skills_router)
 
 
 @router.get("/api/agent-server/status", operation_id="agent_server_status")

@@ -7,6 +7,7 @@ aprendizado" ele ouve, executa, observa os cliques e registra na habilidade.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import queue
 import re
@@ -17,6 +18,8 @@ import time
 from typing import Any, Final
 
 from dodaios.core import company_skills, live_actions, screen_control
+
+log = logging.getLogger(__name__)
 
 SAMPLE_RATE: Final[int] = 16_000
 _BLOCK: Final[int] = 1_600
@@ -50,8 +53,34 @@ def microphone_level(seconds: float = 1.0) -> float:
     return peak
 
 
+_tts: Any = None
+
+
+async def _play_with_app_voice(text: str) -> None:
+    """Fala com a mesma voz das conversas do app."""
+    global _tts
+    import sounddevice
+
+    if _tts is None:
+        from dodaios.core.config import load_config
+        from dodaios.plugins.tts import build_tts_from_config
+
+        _tts = build_tts_from_config(load_config().tts)
+    output = None
+    try:
+        async for chunk in _tts.synthesize(text, language_code="pt-BR"):
+            if output is None:
+                output = sounddevice.RawOutputStream(samplerate=chunk.sample_rate, channels=1, dtype="int16")
+                output.start()
+            output.write(chunk.pcm)
+    finally:
+        if output is not None:
+            output.stop()
+            output.close()
+
+
 def _portuguese_voice() -> list[str]:
-    """Uma voz do sistema em portugues; sem ela o Mac leria em ingles."""
+    """Reserva: a voz do sistema em portugues, se a do app falhar."""
     listed = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10).stdout
     for line in listed.splitlines():
         if "pt_BR" in line:
@@ -62,8 +91,28 @@ def _portuguese_voice() -> list[str]:
 _VOICE: list[str] | None = None
 
 
+def _spoken_step(step: str) -> str:
+    """O passo como ele diria numa conversa."""
+    for pattern, sentence in (
+        (r'^Abrir o aplicativo (.+)$', r"Abri o \1."),
+        (r"^Abrir https?://.+$", "Abri o site."),
+        (r'^Clicar em "(.+)"$', r"Cliquei em \1."),
+        (r'^Digitar ".+"$', "Digitei."),
+        (r"^Apertar (.+)$", r"Apertei \1."),
+        (r"^Rolar para (.+)$", r"Rolei para \1."),
+    ):
+        if re.match(pattern, step):
+            return re.sub(pattern, sentence, step)
+    return "Pronto."
+
+
 def _say(text: str) -> None:
     global _VOICE
+    try:
+        asyncio.run(_play_with_app_voice(text[:400]))
+        return
+    except Exception as exc:  # noqa: BLE001 — a conversa segue com a voz do sistema
+        log.warning("Voz do app indisponivel no ensino: %s", exc)
     if _VOICE is None:
         _VOICE = _portuguese_voice()
     subprocess.run(["say", *_VOICE, text[:400]], capture_output=True, timeout=60)
@@ -205,7 +254,7 @@ class LiveTeach:
             self.pending_link = ""
             self._note("Ele", f"Feito: {result['step']}")
             self._record(result["step"])
-            self._speak("Feito.")
+            self._speak(_spoken_step(result["step"]))
         elif result.get("needs_link"):
             self.pending_link = result["needs_link"]
             question = f"Qual é o endereço do {self.pending_link}?"

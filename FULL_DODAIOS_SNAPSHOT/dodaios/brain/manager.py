@@ -10857,6 +10857,20 @@ class BrainManager:
         # names the background-worker vehicle), so this third consumer cannot
         # drift away from them. The turn is not answered here — it simply stays
         # available for the Agentic-IDE fast path a few lines below.
+        if not screen_context.has_image and self._skill_turn_match is None:
+            # JA: clima em portugues responde direto, sem rodadas do modelo.
+            from dodaios.brain.weather_fast import answer_weather_question
+
+            weather_reply = await answer_weather_question(user_text)
+            if weather_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=weather_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return weather_reply
+
         if (
             not screen_context.has_image
             and self._skill_turn_match is None

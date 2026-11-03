@@ -116,7 +116,7 @@ def _answer_instruction_for(ctx: ExecutionContext) -> str:
 
 _WEATHER_INTENT_RE = re.compile(
     r"\b(weather|forecast|wetter\w*|wettervorhersage|vorhersage|"
-    r"temperatur\w*|temperature|tiempo|clima)\b",
+    r"temperatur\w*|temperature|tiempo|clima|previs[aã]o|chuva|chover)\b",
     re.IGNORECASE,
 )
 
@@ -137,6 +137,10 @@ _WEATHER_NOISE: Final[frozenset[str]] = frozenset({
     "bitte", "sag", "mir", "gib", "regnet", "regen", "schnee", "schneit",  # i18n-allow
     "kalt", "warm", "heiss", "heiß", "sonnig", "draussen", "draußen",  # i18n-allow
     "fuer", "für",  # i18n-allow
+    # intent / question scaffolding (pt)
+    "temperatura", "tempo", "previsão", "previsao", "qual", "o", "os", "as", "em", "no", "na",
+    "para", "pra", "do", "da", "agora", "hoje", "amanhã", "amanha", "vai", "chover", "chuva",
+    "está", "esta", "faz", "graus",
     # intent / question scaffolding (es)
     "tiempo", "clima", "qué", "que", "hace", "hacer", "hay", "hoy",
     "mañana", "manana", "en", "el", "la", "de", "por", "favor", "dime",

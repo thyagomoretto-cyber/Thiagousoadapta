@@ -12,6 +12,7 @@ import os
 import re
 import tempfile
 import threading
+import time
 import unicodedata
 import uuid
 from datetime import UTC, datetime
@@ -23,6 +24,8 @@ _LOCK = threading.Lock()
 _MAX_HISTORY: Final[int] = 200
 _MAX_PROMPT_CHARS: Final[int] = 2_500
 _MIN_MATCH_SCORE: Final[int] = 3
+_SYNC_INTERVAL_S: Final[float] = 30.0
+_last_sync = 0.0
 _NAME_WEIGHT: Final[int] = 3
 _LIST_FIELDS: Final[tuple[str, ...]] = ("steps", "rules", "exceptions", "validation")
 _TEXT_FIELDS: Final[tuple[str, ...]] = (
@@ -71,6 +74,75 @@ def _slug(name: str) -> str:
     return f"{slug or 'habilidade'}-{uuid.uuid4().hex[:6]}"
 
 
+def _shared_root() -> Path:
+    """A pasta que o Syncthing mantem igual entre Mac e Windows."""
+    return Path.home() / ".dodaios-sync" / "company_skills"
+
+
+def sync_skills(*, force: bool = False) -> int:
+    """Copia entre as maquinas a versao mais nova de cada habilidade.
+
+    Fica sem efeito onde a pasta compartilhada nao existe. Duas edicoes da mesma
+    versao em maquinas diferentes guardam a outra como ``.conflito``, para que
+    nada ensinado se perca. Devolve quantos arquivos foram copiados.
+    """
+    global _last_sync
+    shared = _shared_root()
+    if not shared.parent.is_dir() or (not force and time.monotonic() - _last_sync < _SYNC_INTERVAL_S):
+        return 0
+    _last_sync = time.monotonic()
+    local = _root()
+    copied = 0
+    with _LOCK:
+        names = {p.relative_to(local) for p in local.glob("*/*.json")} if local.is_dir() else set()
+        names |= {p.relative_to(shared) for p in shared.glob("*/*.json")} if shared.is_dir() else set()
+        for name in names:
+            mine, theirs = local / name, shared / name
+            try:
+                ours = _read(mine) if mine.is_file() else None
+                other = _read(theirs) if theirs.is_file() else None
+            except ValueError:
+                continue
+            if ours == other:
+                continue
+            if ours is None or other is None:
+                source, target = (theirs, mine) if ours is None else (mine, theirs)
+            else:
+                rank_ours = (ours.get("version", 0), ours.get("updatedAt", ""))
+                rank_other = (other.get("version", 0), other.get("updatedAt", ""))
+                source, target = (mine, theirs) if rank_ours >= rank_other else (theirs, mine)
+                if ours.get("version") == other.get("version"):
+                    loser = _read(target)
+                    keep = target.with_suffix(f".conflito-{loser.get('updatedAt', 'x')[:19].replace(':', '')}")
+                    keep.write_text(json.dumps(loser, ensure_ascii=False, indent=2), encoding="utf-8")
+            _write(target, _read(source))
+            copied += 1
+    return copied
+
+
+def _member_names(company_id: str) -> dict[str, str]:
+    from dodaios.core.paths import user_data_dir
+
+    try:
+        state = json.loads((user_data_dir() / "data" / "companies.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    for company in state.get("companies", []):
+        if company.get("id") == company_id:
+            return {m.get("id"): m.get("name", "") for m in company.get("members", [])}
+    return {}
+
+
+def _route_line(skill: dict[str, Any]) -> str:
+    """A cadeia de responsaveis, para a tarefa nao ficar presa a uma pessoa."""
+    names = _member_names(skill.get("companyId", ""))
+    chain = [f"empresa {skill.get('company')}"]
+    if "gerente-geral" in names:
+        chain.append(names["gerente-geral"])
+    chain += [names[key] for key in (skill.get("managerId"), skill.get("specialistId")) if names.get(key)]
+    return "Encaminhamento: " + " -> ".join(dict.fromkeys(chain))
+
+
 def _write(path: Path, skill: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
@@ -104,6 +176,7 @@ def _clean_list(values: Any) -> list[str]:
 
 
 def list_skills(company_id: str) -> list[dict[str, Any]]:
+    sync_skills()
     folder = _company_dir(company_id)
     if not folder.is_dir():
         return []
@@ -207,6 +280,7 @@ def _words(text: str) -> set[str]:
 
 def matching_skills(text: str, limit: int = 2) -> list[dict[str, Any]]:
     """As habilidades de qualquer empresa que combinam com o pedido."""
+    sync_skills()
     root = _root()
     if not root.is_dir():
         return []
@@ -232,6 +306,7 @@ def skill_prompt(skills: list[dict[str, Any]]) -> str:
     blocks = []
     for skill in skills:
         lines = [f"Habilidade \"{skill.get('name')}\" da empresa {skill.get('company')} (v{skill.get('version')})."]
+        lines.append(_route_line(skill))
         if skill.get("whenToUse"):
             lines.append(f"Quando usar: {skill['whenToUse']}")
         lines += [f"Correcao do dono (prioridade): {c['text']}" for c in skill.get("corrections", [])[-8:]]

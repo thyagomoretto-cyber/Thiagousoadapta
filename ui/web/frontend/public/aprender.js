@@ -2,7 +2,7 @@
 (function () {
   "use strict";
   const WORKSPACE = '[data-testid="companies-workspace"]';
-  const state = { companyId: null, companies: [], skills: [], skill: null, error: "" };
+  const state = { companyId: null, companies: [], skills: [], skill: null, error: "", teach: null };
   let panel = null;
 
   async function api(path, options) {
@@ -67,6 +67,120 @@
     state.skills = (await api(skillsUrl())).skills;
   }
 
+  async function startSession(skill) {
+    const catalog = await api("/api/agent-chat/catalog?surface=jarvis");
+    const pick = catalog.selection || { provider: "local-openai", model: "", effort: "" };
+    const session = await api("/api/agent-chat/sessions", { method: "POST", body: { provider: pick.provider, model: pick.model || "", effort: pick.effort || "", account_id: pick.account_id || "", surface: "jarvis", title: `Ensinar: ${skill.name}` } });
+    return session.id;
+  }
+
+  const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
+
+  async function sendTeach(text) {
+    const teach = state.teach;
+    teach.log.push({ who: "Você", text });
+    teach.busy = true;
+    render();
+    const skill = state.skill;
+    const first = !teach.session;
+    if (first) teach.session = await startSession(skill);
+    const context = first ? `${TEACH_RULES}\nHabilidade: ${skill.name}. Empresa: ${skill.company}. Passos ja aprendidos: ${skill.steps.join("; ") || "nenhum"}.\n\n` : "";
+    const sent = await api(`/api/agent-chat/sessions/${teach.session}/messages`, { method: "POST", body: { text: context + text } });
+    for (let tries = 0; tries < 300; tries += 1) {
+      await new Promise((done) => setTimeout(done, 2000));
+      if (state.teach !== teach) return;
+      const data = await api(`/api/agent-chat/sessions/${teach.session}?tail=200`);
+      const events = data.events || [];
+      const ours = (event) => (event.payload || {}).turn_id === sent.turn_id;
+      if (events.some((event) => event.kind === "approval_required" && ours(event)) && !teach.warned) {
+        teach.warned = true;
+        state.notice = `Ele pediu permissão. Aprove no chat "Ensinar: ${skill.name}".`;
+        render();
+      }
+      if (events.some((event) => event.kind === "turn_finished" && ours(event))) {
+        const reply = events.filter((event) => event.kind === "assistant_text" && ours(event)).map((event) => event.payload.text).join("\n");
+        teach.log.push({ who: "Ele", text: reply || "Terminou sem resposta." });
+        reply.split("\n").forEach((line) => {
+          const found = line.match(/^\W*(PASSO|REGRA|EXCECAO|VALIDAR|EXEMPLO):\s*(.+)$/);
+          if (found) teach.learned.push({ kind: found[1], text: found[2].trim() });
+        });
+        break;
+      }
+    }
+    teach.busy = false;
+  }
+
+  async function saveLearned() {
+    const skill = state.skill;
+    const learned = state.teach.learned;
+    const pick = (kind) => learned.filter((item) => item.kind === kind).map((item) => item.text);
+    const merge = (old, kind) => [...new Set([...old, ...pick(kind)])];
+    let updated = await api(skillsUrl(`/${skill.id}`), { method: "PATCH", body: {
+      steps: merge(skill.steps, "PASSO"), rules: merge(skill.rules, "REGRA"), exceptions: merge(skill.exceptions, "EXCECAO"),
+      validation: merge(skill.validation, "VALIDAR"), note: "Aprendido no modo ensino",
+    } });
+    for (const text of pick("EXEMPLO")) {
+      const [situation, outcome] = text.split("=>").map((part) => part.trim());
+      updated = await api(skillsUrl(`/${skill.id}/examples`), { method: "POST", body: { situation, outcome: outcome || "" } });
+    }
+    state.teach.learned = [];
+    await saved(updated);
+    state.notice = "Aprendizado salvo na habilidade.";
+  }
+
+  async function record(field, control) {
+    if (state.recorder) {
+      const stop = state.recorder;
+      state.recorder = null;
+      control.textContent = "Falar";
+      await stop();
+      return;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const context = new AudioContext({ sampleRate: 16000 });
+    const source = context.createMediaStreamSource(stream);
+    const node = context.createScriptProcessor(4096, 1, 1);
+    const pieces = [];
+    node.onaudioprocess = (event) => pieces.push(Int16Array.from(event.inputBuffer.getChannelData(0), (v) => Math.max(-1, Math.min(1, v)) * 32767));
+    source.connect(node);
+    node.connect(context.destination);
+    control.textContent = "Parar";
+    state.recorder = async () => {
+      node.disconnect();
+      source.disconnect();
+      stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+      const audio = new Int16Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
+      let at = 0;
+      pieces.forEach((piece) => { audio.set(piece, at); at += piece.length; });
+      control.textContent = "Transcrevendo...";
+      const response = await fetch("/api/company-voice/transcribe", { method: "POST", body: audio.buffer });
+      const payload = await response.json().catch(() => ({}));
+      control.textContent = "Falar";
+      if (!response.ok) throw new Error(payload.detail || "Falha ao transcrever");
+      field.value = [field.value, payload.text].filter(Boolean).join(" ");
+    };
+  }
+
+  function teachView() {
+    const teach = state.teach;
+    const text = area("", "ensino", 3);
+    const speak = button("Falar", () => record(text, speak).catch((error) => { state.error = error.message; render(); }));
+    const send = button(teach.busy ? "Executando..." : "Enviar", () => {
+      if (!text.value.trim() || teach.busy) return;
+      guarded(() => sendTeach(text.value.trim()));
+    }, true);
+    const lineOf = (entry) => el("div", { style: { marginTop: "10px" } }, [
+      el("div", { textContent: entry.who, style: { fontSize: "11px", color: colors.muted } }),
+      el("div", { textContent: entry.text, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
+    ]);
+    const learned = teach.learned.map((item) => el("div", { textContent: `${item.kind}: ${item.text}`, style: { marginTop: "4px", fontSize: "12px" } }));
+    return [row([button("← Sair do ensino", () => { state.teach = null; render(); })]),
+      el("p", { textContent: "Explique um passo. Ele executa, pergunta se precisar, e você corrige ou confirma.", style: { fontSize: "12px", color: colors.muted } }),
+      ...teach.log.map(lineOf), label("Sua instrução"), text, row([speak, send]),
+      ...(learned.length ? [title("Aprendeu nesta conversa"), ...learned, row([button("Salvar aprendizado", () => guarded(saveLearned), true)])] : [])];
+  }
+
   function createSkill() {
     const name = window.prompt("Nome da tarefa a ensinar");
     if (name && name.trim()) guarded(async () => saved(await api(skillsUrl(), { method: "POST", body: { name: name.trim() } })));
@@ -106,7 +220,9 @@
     const test = () => guarded(async () => {
       const task = window.prompt(`Descreva um caso para testar "${skill.name}"`);
       if (!task) return;
-      const prompt = `Execute a habilidade "${skill.name}" da empresa ${skill.company}: ${task}. Valide o resultado e relate o que fez.`;
+      const person = (id) => (members(() => true).find((member) => member.id === id) || {}).name;
+      const chain = [person("gerente-geral"), person(skill.managerId), person(skill.specialistId)].filter(Boolean).join(" -> ");
+      const prompt = `EMPRESA: ${skill.company}\nENCAMINHAMENTO: ${chain || "A definir"}\nExecute a habilidade "${skill.name}": ${task}. Valide o resultado e relate o que fez.`;
       const dispatch = async (confirmed) => {
         const response = await fetch("/api/missions/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, language: "pt", confirmed }) });
         const payload = await response.json().catch(() => ({}));
@@ -118,7 +234,8 @@
       state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
     });
     const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
-    return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Testar habilidade", test)]),
+    const teach = () => { state.teach = { session: null, log: [], learned: [], busy: false }; render(); };
+    return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Ensinar conversando", teach, true), button("Testar habilidade", test)]),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
       label("Nome"), form.name, label("Quando usar"), form.whenToUse, label("Passos, um por linha"), form.steps,
       label("Regras, uma por linha"), form.rules, label("Exceções, uma por linha"), form.exceptions, label("Como validar, um por linha"), form.validation,
@@ -132,7 +249,7 @@
 
   function render() {
     if (!panel) return;
-    const body = state.skill ? skillView(state.skill) : listView();
+    const body = state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
     panel.replaceChildren(
       el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
         el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),
@@ -145,7 +262,7 @@
     state.notice = "";
   }
 
-  function closePanel() { if (panel) panel.remove(); panel = null; }
+  function closePanel() { if (panel) panel.remove(); panel = null; state.teach = null; }
 
   function openPanel(host) {
     panel = el("section", { "ariaLabel": "Aprender nova tarefa", style: { position: "absolute", top: "0", right: "0", bottom: "0", zIndex: "10", width: "min(480px, 100%)", boxSizing: "border-box", padding: "20px", overflowY: "auto", borderLeft: `1px solid ${colors.line}`, background: colors.bg, color: colors.text, fontSize: "13px" } });
@@ -158,9 +275,23 @@
     });
   }
 
+  function markManagers(host) {
+    const open = () => { if (!panel) openPanel(host); };
+    host.querySelectorAll("button, div, span, h3, h4, p").forEach((node) => {
+      if (node.childElementCount || node.textContent.trim() !== "Gerente Geral" || node.closest('[data-testid="aprender-painel"]')) return;
+      const parent = node.parentElement;
+      if (!parent || parent.querySelector("[data-aprender]") || node.tagName === "BUTTON") return;
+      const small = button("Aprender", open);
+      small.dataset.aprender = "1";
+      Object.assign(small.style, { marginTop: "4px", padding: "3px 8px", fontSize: "11px" });
+      parent.append(small);
+    });
+  }
+
   function attach() {
     const host = document.querySelector(WORKSPACE);
     if (!host) { closePanel(); return; }
+    markManagers(host);
     if (host.querySelector('[data-testid="aprender-botao"]')) return;
     const launch = button("Aprender nova tarefa", () => { if (!panel) openPanel(host); }, true);
     launch.dataset.testid = "aprender-botao";
@@ -168,6 +299,11 @@
     host.append(launch);
   }
 
-  new MutationObserver(attach).observe(document.documentElement, { childList: true, subtree: true });
+  let waiting = false;
+  new MutationObserver(() => {
+    if (waiting) return;
+    waiting = true;
+    setTimeout(() => { waiting = false; attach(); }, 250);
+  }).observe(document.documentElement, { childList: true, subtree: true });
   attach();
 })();

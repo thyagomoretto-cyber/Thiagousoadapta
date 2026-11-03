@@ -1,7 +1,7 @@
 """Rotas do modo de aprendizado: habilidades ensinadas a cada empresa."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from dodaios.core import company_skills as store
@@ -10,7 +10,12 @@ from .companies_routes import _read_state
 
 router = APIRouter(prefix="/api/companies/{company_id}/skills", tags=["company-skills"])
 
+voice_router = APIRouter(prefix="/api/company-voice", tags=["company-skills"])
+
 _MAX_TEXT = 8_000
+#: Dois minutos de PCM de 16 bits a 16 kHz.
+_MAX_AUDIO_BYTES = 1_920_000
+_stt = None
 _MAX_LIST = 200
 
 
@@ -89,3 +94,19 @@ def add_skill_example(company_id: str, skill_id: str, body: Example) -> dict:
 def add_skill_correction(company_id: str, skill_id: str, body: Correction) -> dict:
     _company_name(company_id)
     return _guarded(store.add_correction, company_id, skill_id, body.text)
+
+
+@voice_router.post("/transcribe")
+async def transcribe_teaching(request: Request) -> dict:
+    """Transcreve uma fala do ensino com o mesmo motor de voz do app."""
+    global _stt
+    audio = await request.body()
+    if not audio or len(audio) > _MAX_AUDIO_BYTES or len(audio) % 2:
+        raise HTTPException(status_code=422, detail="Audio invalido")
+    if _stt is None:
+        from dodaios.core.config import load_config
+        from dodaios.plugins.stt import build_stt_from_config
+
+        _stt = build_stt_from_config(load_config().stt)
+    result = await _stt.transcribe_pcm(audio, sample_rate=16_000)
+    return {"text": (getattr(result, "text", "") or "").strip()}

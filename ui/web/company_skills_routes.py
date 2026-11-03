@@ -96,7 +96,8 @@ def patch_company_skill(company_id: str, skill_id: str, body: SkillFields) -> di
 @router.delete("/{skill_id}")
 def delete_company_skill(company_id: str, skill_id: str) -> dict:
     _company_name(company_id)
-    return {"backup": _guarded(store.delete_skill, company_id, skill_id)}
+    _guarded(store.delete_skill, company_id, skill_id)
+    return {"ok": True}
 
 
 @router.post("/{skill_id}/examples", status_code=201)

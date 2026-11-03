@@ -376,7 +376,7 @@
     const company = el("select", { value: state.companyId || "", style: fieldStyle, onchange: (event) => guarded(() => loadCompany(event.target.value)) },
       state.companies.map((item) => el("option", { value: item.id, textContent: item.name })));
     company.value = state.companyId || "";
-    const removeSkill = (skill) => ask(`Apagar a habilidade "${skill.name}"? Uma cópia será guardada.`, async () => {
+    const removeSkill = (skill) => ask(`Apagar a habilidade "${skill.name}"? Não será possível recuperar.`, async () => {
       await api(skillsUrl(`/${skill.id}`), { method: "DELETE", body: {} });
       state.skills = (await api(skillsUrl())).skills;
       state.notice = `Habilidade ${skill.name} apagada.`;

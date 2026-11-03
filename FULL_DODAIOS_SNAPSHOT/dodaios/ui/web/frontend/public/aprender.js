@@ -181,9 +181,28 @@
       ...(learned.length ? [title("Aprendeu nesta conversa"), ...learned, row([button("Salvar aprendizado", () => guarded(saveLearned), true)])] : [])];
   }
 
+  // O app do Mac nao mostra window.prompt nem window.confirm, entao pergunta aqui.
+  function ask(question, onAnswer, hasText) {
+    state.asking = { question, onAnswer, hasText: hasText !== false };
+    render();
+  }
+
+  function askView() {
+    const asking = state.asking;
+    const answer = input("", "resposta");
+    const finish = () => {
+      if (asking.hasText && !answer.value.trim()) return;
+      state.asking = null;
+      guarded(() => asking.onAnswer(answer.value.trim()));
+    };
+    answer.addEventListener("keydown", (event) => { if (event.key === "Enter") finish(); });
+    setTimeout(() => answer.focus(), 0);
+    return [label(asking.question), ...(asking.hasText ? [answer] : []),
+      row([button(asking.hasText ? "Continuar" : "Autorizar", finish, true), button("Cancelar", () => { state.asking = null; render(); })])];
+  }
+
   function createSkill() {
-    const name = window.prompt("Nome da tarefa a ensinar");
-    if (name && name.trim()) guarded(async () => saved(await api(skillsUrl(), { method: "POST", body: { name: name.trim() } })));
+    ask("Nome da tarefa a ensinar", async (name) => saved(await api(skillsUrl(), { method: "POST", body: { name } })));
   }
 
   function listView() {
@@ -217,21 +236,24 @@
     const addExample = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}/examples`), { method: "POST", body: { situation: exampleText.value, outcome: exampleResult.value } })));
     const correctionText = area("", "correction", 2);
     const addCorrection = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}/corrections`), { method: "POST", body: { text: correctionText.value } })));
-    const test = () => guarded(async () => {
-      const task = window.prompt(`Descreva um caso para testar "${skill.name}"`);
-      if (!task) return;
+    const test = () => ask(`Descreva um caso para testar "${skill.name}"`, async (task) => {
       const person = (id) => (members(() => true).find((member) => member.id === id) || {}).name;
       const chain = [person("gerente-geral"), person(skill.managerId), person(skill.specialistId)].filter(Boolean).join(" -> ");
       const prompt = `EMPRESA: ${skill.company}\nENCAMINHAMENTO: ${chain || "A definir"}\nExecute a habilidade "${skill.name}": ${task}. Valide o resultado e relate o que fez.`;
       const dispatch = async (confirmed) => {
         const response = await fetch("/api/missions/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, language: "pt", confirmed }) });
         const payload = await response.json().catch(() => ({}));
-        if (response.status === 409 && payload.requires_confirm && !confirmed && window.confirm(`Ação sensível detectada (${payload.matched_text || "ação"}). Autorizar o teste?`)) return dispatch(true);
+        if (response.status === 409 && payload.requires_confirm && !confirmed) {
+          ask(`Ação sensível detectada (${payload.matched_text || "ação"}). Autorizar o teste?`, async () => {
+            await dispatch(true);
+            state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
+          }, false);
+          return false;
+        }
         if (!response.ok) throw new Error(payload.detail || `Erro ${response.status}`);
-        return payload;
+        return true;
       };
-      await dispatch(false);
-      state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
+      if (await dispatch(false)) state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
     });
     const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
     const teach = () => { state.teach = { session: null, log: [], learned: [], busy: false }; render(); };
@@ -249,7 +271,7 @@
 
   function render() {
     if (!panel) return;
-    const body = state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
+    const body = state.asking ? askView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
     panel.replaceChildren(
       el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
         el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),

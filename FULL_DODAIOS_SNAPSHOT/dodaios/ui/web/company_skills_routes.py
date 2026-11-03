@@ -72,6 +72,15 @@ def create_company_skill(company_id: str, body: SkillFields) -> dict:
     return _guarded(store.create_skill, company_id, name, body.model_dump(exclude={"note"}))
 
 
+@router.post("/archive", status_code=201)
+def archive_company_skills(company_id: str) -> dict:
+    """Copia a empresa e as habilidades. O painel exige isso antes de apagar."""
+    for company in _read_state().companies:
+        if company.id == company_id:
+            return {"backup": _guarded(store.archive_company, company_id, company.model_dump())}
+    raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+
+
 @router.get("/{skill_id}")
 def get_company_skill(company_id: str, skill_id: str) -> dict:
     _company_name(company_id)

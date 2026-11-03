@@ -175,6 +175,14 @@ def _clean_list(values: Any) -> list[str]:
     return [str(value).strip() for value in values or () if str(value).strip()]
 
 
+def archive_company(company_id: str, company: dict[str, Any]) -> str:
+    """Guarda a empresa e as habilidades antes de apagar; devolve o nome da copia."""
+    folder = _root().parent / "company_backups"
+    name = f"{quote(company_id, safe='')}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.json"
+    _write(folder / name, {"company": company, "skills": list_skills(company_id)})
+    return name
+
+
 def list_skills(company_id: str) -> list[dict[str, Any]]:
     sync_skills()
     folder = _company_dir(company_id)

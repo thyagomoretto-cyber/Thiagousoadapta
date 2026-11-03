@@ -289,14 +289,47 @@
   }
 
   // O app do Mac nao mostra window.prompt nem window.confirm, entao pergunta aqui.
-  function ask(question, onAnswer, hasText) {
-    state.asking = { question, onAnswer, hasText: hasText !== false };
+  function ask(question, onAnswer, hasText, initial) {
+    state.asking = { question, onAnswer, hasText: hasText !== false, initial: initial || "" };
     render();
+  }
+
+  async function reloadCompanies(preferred) {
+    const data = await api("/api/companies");
+    state.companies = data.companies || [];
+    const found = state.companies.some((item) => item.id === preferred);
+    await loadCompany(found ? preferred : data.activeCompanyId || (state.companies[0] && state.companies[0].id) || null);
+    const host = document.querySelector(WORKSPACE);
+    const refresh = host && host.querySelector("header button");
+    if (refresh) refresh.click();
+  }
+
+  function addCompany() {
+    ask("Nome da empresa", (name) => {
+      ask("Segmento da empresa", async (segment) => {
+        const company = await api("/api/companies", { method: "POST", body: { name, segment } });
+        await reloadCompanies(company.id);
+        state.notice = `Empresa ${company.name} adicionada.`;
+      }, true, "Empresa");
+    });
+  }
+
+  function removeCompany() {
+    const company = state.companies.find((item) => item.id === state.companyId);
+    if (!company) return;
+    ask(`Para apagar, digite exatamente: ${company.name}`, async (typed) => {
+      if (typed !== company.name) throw new Error("O nome não confere. Nada foi apagado.");
+      const url = `/api/companies/${encodeURIComponent(company.id)}`;
+      await api(`${url}/skills/archive`, { method: "POST", body: {} });
+      await api(url, { method: "DELETE", body: {} });
+      await reloadCompanies(null);
+      state.notice = `Empresa ${company.name} apagada. Uma cópia foi guardada.`;
+    });
   }
 
   function askView() {
     const asking = state.asking;
-    const answer = input("", "resposta");
+    const answer = input(asking.initial, "resposta");
     const finish = () => {
       if (asking.hasText && !answer.value.trim()) return;
       state.asking = null;
@@ -323,7 +356,8 @@
       el("div", { textContent: skill.name, style: { fontSize: "13px", fontWeight: "600" } }),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · ${skill.rules.length} regras · versão ${skill.version}`, style: { marginTop: "3px", fontSize: "12px", color: colors.muted } }),
     ]));
-    return [label("Empresa"), company, row([button("Criar nova habilidade", createSkill, true)]), title("Habilidades ensinadas"),
+    return [label("Empresa"), company, row([button("Adicionar empresa", addCompany), ...(state.companyId ? [button("Apagar empresa", removeCompany)] : [])]),
+      ...(state.companyId ? [row([button("Criar nova habilidade", createSkill, true)])] : []), title("Habilidades ensinadas"),
       ...(items.length ? items : [el("p", { textContent: "Nenhuma habilidade ainda. Crie a primeira e ensine passo a passo.", style: { fontSize: "13px", color: colors.muted } })])];
   }
 
@@ -397,11 +431,24 @@
     panel = el("section", { "ariaLabel": "Aprender nova tarefa", style: { position: "absolute", top: "0", right: "0", bottom: "0", zIndex: "10", width: "min(480px, 100%)", boxSizing: "border-box", padding: "20px", overflowY: "auto", borderLeft: `1px solid ${colors.line}`, background: colors.bg, color: colors.text, fontSize: "13px" } });
     panel.dataset.testid = "aprender-painel";
     host.append(panel);
-    guarded(async () => {
+    return guarded(async () => {
       const data = await api("/api/companies");
       state.companies = data.companies || [];
       await loadCompany(data.activeCompanyId || (state.companies[0] && state.companies[0].id) || null);
     });
+  }
+
+  // O botao da barra lateral usa uma janela que o app do Mac nao mostra.
+  function takeOverAddButton(host) {
+    const add = [...host.querySelectorAll("aside button")].find((node) => node.textContent.trim() === "Adicionar empresa");
+    if (!add || add.dataset.aprender) return;
+    add.dataset.aprender = "1";
+    add.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const go = () => addCompany();
+      if (panel) go(); else { openPanel(host).then(go); }
+    }, true);
   }
 
   function markManagers(host) {
@@ -421,6 +468,7 @@
     const host = document.querySelector(WORKSPACE);
     if (!host) { closePanel(); return; }
     markManagers(host);
+    takeOverAddButton(host);
     if (host.querySelector('[data-testid="aprender-botao"]')) return;
     const launch = button("Aprender nova tarefa", () => { if (!panel) openPanel(host); }, true);
     launch.dataset.testid = "aprender-botao";

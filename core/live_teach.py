@@ -50,8 +50,23 @@ def microphone_level(seconds: float = 1.0) -> float:
     return peak
 
 
+def _portuguese_voice() -> list[str]:
+    """Uma voz do sistema em portugues; sem ela o Mac leria em ingles."""
+    listed = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10).stdout
+    for line in listed.splitlines():
+        if "pt_BR" in line:
+            return ["-v", line.split("  ")[0].strip()]
+    return []
+
+
+_VOICE: list[str] | None = None
+
+
 def _say(text: str) -> None:
-    subprocess.run(["say", text[:200]], capture_output=True, timeout=30)
+    global _VOICE
+    if _VOICE is None:
+        _VOICE = _portuguese_voice()
+    subprocess.run(["say", *_VOICE, text[:400]], capture_output=True, timeout=60)
 
 
 class LiveTeach:
@@ -109,6 +124,11 @@ class LiveTeach:
             company_skills.update_skill(
                 self.company_id, self.skill_id, {"steps": [*skill["steps"], step]}, "Aprendido ao vivo"
             )
+
+    def speak(self, text: str) -> None:
+        """Fala uma resposta do assistente, com o microfone em pausa."""
+        if self.live:
+            self._speak(text)
 
     def _speak(self, text: str) -> None:
         self.muted = True
@@ -172,6 +192,11 @@ class LiveTeach:
         if _FINISH.search(text):
             self.stop()
             return
+        if self.pending_link and re.search(r"\b(cancela|cancelar|deixa|esquece)\b", text, re.I):
+            self.pending_link = ""
+            self._note("Ele", "Certo, deixei de lado.")
+            self._speak("Certo.")
+            return
         result = live_actions.act(text, self.pending_link)
         if result.get("failed"):
             self._note("Ele", result["failed"])
@@ -180,9 +205,12 @@ class LiveTeach:
             self.pending_link = ""
             self._note("Ele", f"Feito: {result['step']}")
             self._record(result["step"])
+            self._speak("Feito.")
         elif result.get("needs_link"):
             self.pending_link = result["needs_link"]
-            question = f"Qual é o endereço de {self.pending_link}?"
+            question = f"Qual é o endereço do {self.pending_link}?"
+            if result.get("again"):
+                question = f"Não entendi o endereço do {self.pending_link}. Fale, por exemplo: kenlo ponto com ponto br."
             self._note("Ele", question)
             self._speak(question)
         else:

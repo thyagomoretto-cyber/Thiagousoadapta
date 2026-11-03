@@ -147,6 +147,18 @@ def start_live_teaching(body: TeachStart) -> dict:
     return {"ok": True}
 
 
+class TeachSpeech(BaseModel):
+    text: str = Field(max_length=_MAX_TEXT)
+
+
+@voice_router.post("/ensino/falar")
+def speak_in_teaching(body: TeachSpeech) -> dict:
+    from dodaios.core.live_teach import SESSION
+
+    SESSION.speak(body.text)
+    return {"ok": True}
+
+
 @voice_router.post("/ensino/parar")
 def stop_live_teaching() -> dict:
     from dodaios.core.live_teach import SESSION

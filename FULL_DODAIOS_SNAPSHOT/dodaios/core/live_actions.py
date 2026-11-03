@@ -28,6 +28,15 @@ _GO_VERB = re.compile(
 
 
 _POLITE = r"^(?:por favor |agora |entao |depois |e )*"
+_GO_PLAIN = re.compile(
+    _POLITE + r"(?:entre|entra|entrar|acesse|acessa|acessar|va|vai|ir|navegue|navega)\s+"
+    r"(?:(?:no|na|em|para|pro|pra|ao|o|a)\s+)+(.+)$"
+)
+#: Partes da tela ou arquivos, que nunca sao nome de site.
+_NOT_A_SITE: Final[frozenset[str]] = frozenset(
+    "campo botao menu aba proxima pagina anterior tela janela arquivo planilha pasta documento "
+    "formulario opcao item lista cadastro".split()
+)
 _CLICK = re.compile(
     _POLITE + r"(?:clique|clica|clicar|aperte|aperta|apertar|pressione|selecione|escolha)\s+"
     r"(?:(?:em|no|na|nos|nas|sobre|o|a|os|as)\s+)*"
@@ -38,6 +47,14 @@ _TYPE = re.compile(r"^(?:por favor |agora |entao |depois |e )*(?:digite|digita|d
 _KEY = re.compile(_POLITE + r"(?:aperte|aperta|apertar|pressione|tecle)\s+(?:a\s+tecla\s+|o\s+)?(enter|tab|esc|espaco|apagar|baixo|cima|esquerda|direita)$")
 _SCROLL = re.compile(_POLITE + r"(?:role|rola|rolar|desca|suba|desce|sobe)\b.*?(baixo|cima)?$")
 _APP_ALIASES: Final[dict[str, str]] = {"crome": "chrome", "cromo": "chrome", "gugou chrome": "google chrome"}
+
+
+def _site_named(match: re.Match[str] | None) -> re.Match[str] | None:
+    """Aceita o pedido so se o alvo parece um nome, nao uma parte da tela."""
+    if match is None:
+        return None
+    words = match.group(1).split()
+    return match if len(words) <= 3 and not set(words) & _NOT_A_SITE else None
 
 
 def _screen_step(text: str, folded: str) -> dict[str, Any] | None:
@@ -135,7 +152,9 @@ def act(text: str, pending_link: str = "") -> dict[str, Any]:
     if pending_link and url:
         save_link(pending_link, url)
     folded = _fold(text)
-    go = _GO_VERB.match(folded)
+    if pending_link and not url:
+        return {"done": False, "needs_link": pending_link, "again": True}
+    go = _GO_VERB.match(folded) or _site_named(_GO_PLAIN.match(folded))
     if url and (pending_link or go or _OPEN_VERB.match(folded)):
         _open("-a", _BROWSER, url)
         return {"done": True, "step": f"Abrir {url} no {_BROWSER}"}
@@ -152,4 +171,11 @@ def act(text: str, pending_link: str = "") -> dict[str, Any]:
         if app:
             _open("-a", app)
             return {"done": True, "step": f"Abrir o aplicativo {app}"}
+        named = _site_named(opened)
+        if named:
+            known = _links().get(named.group(1).strip())
+            if known:
+                _open("-a", _BROWSER, known)
+                return {"done": True, "step": f"Abrir {known} no {_BROWSER}"}
+            return {"done": False, "needs_link": named.group(1).strip()}
     return _screen_step(text, folded) or {"done": False}

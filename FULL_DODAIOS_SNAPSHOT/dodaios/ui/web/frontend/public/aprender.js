@@ -74,7 +74,7 @@
     return session.session_id;
   }
 
-  const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. Quando o caminho mudar conforme o caso, como um imovel comercial ou residencial, pergunte como identificar e registre a decisao. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / CONDICAO: se tal caso, entao fazer tal coisa / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
+  const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. Nunca adivinhe link, nome, senha ou dado: se faltar algo, pare e faca uma pergunta curta. Responda em poucas frases, porque sua resposta sera falada. Quando o caminho mudar conforme o caso, como um imovel comercial ou residencial, pergunte como identificar e registre a decisao. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / CONDICAO: se tal caso, entao fazer tal coisa / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
 
   async function sendTeach(text, alreadyLogged) {
     const teach = state.teach;
@@ -83,6 +83,11 @@
     render();
     try {
       await runTeachTurn(teach, text);
+      const last = teach.log[teach.log.length - 1];
+      if (alreadyLogged && last.who === "Ele") {
+        const spoken = last.text.split("\n").filter((line) => !/^\W*(PASSO|REGRA|CONDICAO|EXCECAO|VALIDAR|EXEMPLO):/.test(line)).join(" ").trim();
+        if (spoken) await api("/api/company-voice/ensino/falar", { method: "POST", body: { text: spoken } });
+      }
     } finally {
       teach.busy = false;
     }

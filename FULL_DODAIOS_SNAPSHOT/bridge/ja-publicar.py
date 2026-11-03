@@ -151,6 +151,7 @@ def main() -> int:
     parser.add_argument("--mensagem", default="")
     parser.add_argument("--arquivo", action="append", default=[])
     parser.add_argument("--verificar", action="store_true")
+    parser.add_argument("--marcar-estavel", metavar="COMMIT", help="libera esta versao para todas as maquinas")
     args = parser.parse_args()
     try:
         if args.verificar:
@@ -158,6 +159,16 @@ def main() -> int:
                 raise Recusado("esta maquina nao e a publicadora")
             head = git("ls-remote", REMOTE, BRANCH, cwd=None).stdout.split()[:1]
             print(f"PUBLICADOR=OK {head[0][:7] if head else 'sem branch'}")
+            return 0
+        if args.marcar_estavel:
+            if not MARKER.is_file():
+                raise Recusado("esta maquina nao e a publicadora")
+            prepare_clone()
+            commit = git("rev-parse", "--verify", f"{args.marcar_estavel}^{{commit}}").stdout.strip()
+            git("tag", "-f", "estavel", commit)
+            git("push", "--force", "origin", "refs/tags/estavel")
+            record({"resultado": "ESTAVEL", "commit": commit[:7]})
+            print(f"ESTAVEL={commit[:7]}")
             return 0
         WORK.mkdir(parents=True, exist_ok=True)
         try:

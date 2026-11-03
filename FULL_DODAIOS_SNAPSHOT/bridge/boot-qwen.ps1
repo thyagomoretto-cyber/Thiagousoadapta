@@ -13,5 +13,5 @@ $loaded = ((& "C:\Users\ME Arquitetura\.lmstudio\bin\lms.exe" ps 2>&1) -join "
 ")
 
 if ($loaded -notmatch '(?m)^qwen/qwen3\.5-9b\s') {
-    & "C:\Users\ME Arquitetura\.lmstudio\bin\lms.exe" load "qwen/qwen3.5-9b" --gpu max --yes | Out-Null
+    & "C:\Users\ME Arquitetura\.lmstudio\bin\lms.exe" load "qwen/qwen3.5-9b" --context-length 32768 --gpu max --yes | Out-Null
 }

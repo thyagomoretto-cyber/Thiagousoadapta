@@ -10,7 +10,7 @@ $loaded = ((& $lms ps 2>&1) -join "
 ")
 
 if ($loaded -notmatch '(?m)^qwen/qwen3\.5-9b\s') {
-    & $lms load "qwen/qwen3.5-9b" --gpu max --yes
+    & $lms load "qwen/qwen3.5-9b" --context-length 32768 --gpu max --yes
 }
 
 Start-Sleep -Seconds 2

@@ -39,7 +39,7 @@ Start-Sleep -Seconds 3
 $psOutput = (& $Lms ps 2>&1 | Out-String)
 
 if ($psOutput -notmatch [regex]::Escape($Model)) {
-    & $Lms load $Model | Out-Null
+    & $Lms load $Model --context-length 32768 --gpu max --yes | Out-Null
     Start-Sleep -Seconds 8
 }
 

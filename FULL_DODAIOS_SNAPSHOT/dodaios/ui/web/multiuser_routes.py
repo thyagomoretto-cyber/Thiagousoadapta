@@ -1,24 +1,28 @@
 from __future__ import annotations
-import subprocess
 
 import json
+import logging
 import os
 import re
+import subprocess
+import sys
 import unicodedata
-
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/multiuser", tags=["multiuser"])
 
 STATE = Path.home() / ".dodaios"
 PROFILES = STATE / "profiles"
 ACTIVE = STATE / "active_profile.json"
+
+_PROFILE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 def safe_id(value: str) -> str:
@@ -28,20 +32,43 @@ def safe_id(value: str) -> str:
     return value or "usuario"
 
 
+def read_json(path: Path) -> Any:
+    """Le JSON com ou sem BOM, inclusive arquivos antigos gravados em cp1252."""
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252")
+    return json.loads(text)
+
+
+def write_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
 def load_profiles():
     rows = []
 
     if not PROFILES.exists():
         return rows
 
-    for directory in sorted(PROFILES.iterdir()):
+    try:
+        directories = sorted(PROFILES.iterdir())
+    except OSError as exc:
+        log.warning("Perfis inacessiveis em %s: %s", PROFILES, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="A pasta de perfis esta inacessivel.",
+        ) from exc
+
+    for directory in directories:
         profile_file = directory / "profile.json"
 
-        if not directory.is_dir() or not profile_file.exists():
-            continue
-
         try:
-            data = json.loads(profile_file.read_text())
+            if not directory.is_dir() or not profile_file.exists():
+                continue
+
+            data = read_json(profile_file)
 
             rows.append({
                 "id": data.get("id", directory.name),
@@ -49,27 +76,31 @@ def load_profiles():
                 "role": data.get("role", "user"),
             })
 
-        except Exception:
-            continue
+        except (OSError, ValueError, AttributeError) as exc:
+            log.warning("Perfil ignorado (%s): %s", directory.name, exc)
 
     return rows
 
 
 def current_profile():
     try:
-        return json.loads(ACTIVE.read_text()).get("profile_id", "thiago")
-    except Exception:
+        return read_json(ACTIVE).get("profile_id", "thiago")
+    except (OSError, ValueError, AttributeError):
         return "thiago"
 
 
 def activate(profile_id: str):
+    if not _PROFILE_ID.fullmatch(profile_id):
+        raise HTTPException(status_code=400, detail="Perfil invalido.")
+
     profile_dir = PROFILES / profile_id
     profile_file = profile_dir / "profile.json"
 
     if not profile_file.exists():
         raise HTTPException(status_code=404, detail="Perfil inexistente.")
 
-    ACTIVE.write_text(
+    write_text(
+        ACTIVE,
         json.dumps(
             {
                 "profile_id": profile_id,
@@ -77,10 +108,13 @@ def activate(profile_id: str):
             },
             ensure_ascii=False,
             indent=2,
-        ) + "\n"
+        ) + "\n",
     )
 
-    ACTIVE.chmod(0o600)
+    try:
+        ACTIVE.chmod(0o600)
+    except OSError as exc:
+        log.debug("chmod ignorado em %s: %s", ACTIVE, exc)
 
     # Atualiza também o ambiente do processo atual.
     os.environ["DODAIOS_MULTIUSER"] = "1"
@@ -91,7 +125,7 @@ def activate(profile_id: str):
 
 
 @router.get("")
-async def get_profiles():
+def get_profiles():
     return {
         "profiles": load_profiles(),
         "active": current_profile(),
@@ -103,7 +137,7 @@ class SelectProfile(BaseModel):
 
 
 @router.post("/select")
-async def select_profile(payload: SelectProfile):
+def select_profile(payload: SelectProfile):
     profile_id = activate(payload.profile_id.strip())
 
     return {
@@ -118,7 +152,13 @@ class CreateProfile(BaseModel):
 
 
 @router.post("/create")
-async def create_profile(payload: CreateProfile):
+def create_profile(payload: CreateProfile):
+    # O primeiro perfil de uma instalacao nova ainda nao tem administrador.
+    if load_profiles():
+        from .ja_update_auth import require_update_administrator
+
+        require_update_administrator()
+
     name = payload.display_name.strip()
 
     if not name:
@@ -146,21 +186,13 @@ async def create_profile(payload: CreateProfile):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    (directory / "profile.json").write_text(
-        json.dumps(profile, ensure_ascii=False, indent=2) + "\n"
+    write_text(
+        directory / "profile.json",
+        json.dumps(profile, ensure_ascii=False, indent=2) + "\n",
     )
-
-    (directory / "rules.json").write_text(
-        '{"schema_version":1,"rules":[]}\n'
-    )
-
-    (directory / "preferences.json").write_text(
-        '{"schema_version":1,"preferences":{}}\n'
-    )
-
-    (directory / "computers.json").write_text(
-        '{"schema_version":1,"computers":[]}\n'
-    )
+    write_text(directory / "rules.json", '{"schema_version":1,"rules":[]}\n')
+    write_text(directory / "preferences.json", '{"schema_version":1,"preferences":{}}\n')
+    write_text(directory / "computers.json", '{"schema_version":1,"computers":[]}\n')
 
     return {
         "ok": True,
@@ -171,15 +203,20 @@ async def create_profile(payload: CreateProfile):
         },
     }
 
+
 @router.post("/restart")
 def restart_dodaios():
     """Reinicia a instância local do DodaiOS pelo LaunchAgent do macOS."""
-    import os
+    if sys.platform != "darwin":
+        raise HTTPException(
+            status_code=501,
+            detail="Neste sistema use /api/settings/restart-app.",
+        )
 
     uid = os.getuid()
 
     command = (
-        "sleep 0.8; "
+        "sleep 0.1; "
         f"/bin/launchctl kickstart -k gui/{uid}/com.personal-jarvis.autostart "
         ">/tmp/dodaios-restart.log 2>&1"
     )
@@ -193,4 +230,3 @@ def restart_dodaios():
     )
 
     return {"ok": True, "status": "restarting"}
-

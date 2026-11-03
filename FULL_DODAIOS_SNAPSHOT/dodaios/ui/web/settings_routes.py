@@ -2828,6 +2828,8 @@ async def restart_app(request: Request, force: bool = False) -> dict[str, object
     protects every interactive restart source at once: TopBar and taskbar
     settings. Control clients are refused before this guard.
     """
+    from .ja_update_auth import require_update_administrator
+    require_update_administrator()
     require_interactive_desktop_action(request, action="restart")
     if not force:
         kontrollierer = getattr(request.app.state, "kontrollierer", None)

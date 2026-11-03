@@ -15,7 +15,7 @@ New-Item $Bak -ItemType Directory -Force | Out-Null
 Copy-Item $Gate "$Bak\UserSelectorGate.tsx" -Force
 Copy-Item $RunDist "$Bak\dist" -Recurse -Force
 
-$T=Get-Content $Gate -Raw
+$T=Get-Content $Gate -Raw -Encoding UTF8
 
 # 1. Ao montar novamente, se já escolheu usuário nesta sessão,
 # entra direto sem mostrar o seletor.

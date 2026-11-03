@@ -30,7 +30,18 @@ def require_interactive_desktop_action(
     headers = getattr(request, "headers", None)
     authorization = headers.get("authorization", "") if headers is not None else ""
     origin = headers.get("origin", "") if headers is not None else ""
-    if authorization.strip() or (require_origin and not origin.strip()):
+    # JA: allow explicit lifecycle clicks coming from our own local web UI.
+    host = ""
+    try:
+        host = str(getattr(request.url, "hostname", "") or "").lower()
+    except Exception:
+        pass
+
+    local_ui = host in {"127.0.0.1", "localhost", "::1"}
+
+    if (authorization.strip() and not local_ui) or (
+        require_origin and not origin.strip()
+    ):
         raise HTTPException(
             status_code=403,
             detail={

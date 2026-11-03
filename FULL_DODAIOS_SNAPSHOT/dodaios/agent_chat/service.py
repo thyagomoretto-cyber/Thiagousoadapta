@@ -3229,3 +3229,12 @@ __all__ = [
     "resolve_runner",
     "session_runner",
 ]
+
+
+# JA QWEN LOCAL API OVERRIDE
+_JA_ORIGINAL_RESOLVE_RUNNER = resolve_runner
+
+def resolve_runner(provider, *args, **kwargs):
+    if str(provider or "").strip().lower() == "local-openai":
+        return "api"
+    return _JA_ORIGINAL_RESOLVE_RUNNER(provider, *args, **kwargs)

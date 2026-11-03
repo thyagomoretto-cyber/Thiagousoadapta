@@ -37,8 +37,9 @@
       "backup": "C:\\Users\\ME Arquitetura\\.dodaios\\ja_backups\\persistent_fixes\\frontend_unicode_regex_fix\\index-DSsJHycP.js",
       "sha256": "5b4ea3872acbc764c2e93499ead77512d8376671f19ea7e9c4cfa64f795e2390",
       "registered_at": "2026-11-02T20:02:15.376846+00:00",
-      "enabled": true,
-      "status": "validated"
+      "enabled": false,
+      "status": "superseded",
+      "note": "Substituido pela correcao no source e por check_bundle.mjs."
     },
     {
       "id": "profiles_fast_local_path",

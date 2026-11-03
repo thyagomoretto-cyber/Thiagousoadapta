@@ -39,3 +39,7 @@ node_modules/
 
 .DS_Store
 Thumbs.db
+
+# Codigo-fonte, nao credenciais reais
+!society/credentials.py
+!**/society/credentials.py

@@ -235,7 +235,7 @@ function slugify(s: string): string {
   return s
     .toLowerCase()
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "") // strip diacritics
+    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
     .replace(/[^a-z0-9\s-]/g, " ") // turn all non-alnum into a space
     .trim()
     .split(/\s+/)

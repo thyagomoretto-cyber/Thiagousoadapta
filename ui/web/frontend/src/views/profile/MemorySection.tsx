@@ -41,7 +41,7 @@ export function wikiSlug(name: string | null | undefined): string | null {
   if (!name) return null;
   const slug = name
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "") // combining marks, after NFD
+    .replace(/[\u0300-\u036f]/g, "") // combining marks, after NFD
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");

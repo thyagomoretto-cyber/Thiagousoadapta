@@ -1,0 +1,9 @@
+ATUALIZACAO DO JA
+
+1. Extraia este ZIP em uma pasta, por exemplo Downloads.
+2. De dois cliques em ATUALIZAR-JA.cmd.
+3. Espere terminar. O JA sera fechado durante a atualizacao.
+4. Se o resultado for OK, abra o JA normalmente.
+
+O relatorio fica nesta pasta, em RELATORIO-*.txt.
+Para voltar ao estado anterior, use DESFAZER-ATUALIZACAO.cmd.

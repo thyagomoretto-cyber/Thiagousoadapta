@@ -179,3 +179,4 @@ websockets==17.4
 wheel==0.48.0
 yarl==1.25.1
 pywin32
+global-hotkeys>=0.1.7

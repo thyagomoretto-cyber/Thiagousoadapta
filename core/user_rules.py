@@ -13,7 +13,7 @@ NATIVE_RULES = GLOBAL / "native_rules.json"
 
 def _read_json(path: Path, default):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return default
 

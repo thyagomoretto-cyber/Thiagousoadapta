@@ -34,10 +34,8 @@ if(!(Test-Path "$SrcDist\index.html")){
 
 $Bad=0
 
-Get-ChildItem "$SrcDist\assets" -Filter *.js -File | ForEach-Object {
-    cmd.exe /d /c "node --check ""$($_.FullName)"" >nul 2>&1"
-    if($LASTEXITCODE -ne 0){ $Bad++ }
-}
+& node --experimental-vm-modules --no-warnings "$R\ja_patches\check_bundle.mjs" "$SrcDist\assets"
+if($LASTEXITCODE -ne 0){ $Bad++ }
 
 if($Bad -gt 0){
     Write-Host "ERRO=JS_INVALIDO ($Bad)"

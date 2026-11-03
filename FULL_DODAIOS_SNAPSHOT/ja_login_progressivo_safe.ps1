@@ -13,7 +13,7 @@ Write-Host "===== JA LOGIN PROGRESSIVO SAFE ====="
 New-Item $Bak -ItemType Directory -Force | Out-Null
 Copy-Item $Gate "$Bak\UserSelectorGate.tsx" -Force
 
-$T=Get-Content $Gate -Raw
+$T=Get-Content $Gate -Raw -Encoding UTF8
 
 # Localiza o handler atual da seleção
 if($T -notmatch 'await fetch\("/api/multiuser/select"'){

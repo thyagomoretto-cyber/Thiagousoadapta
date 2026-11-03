@@ -1,6 +1,26 @@
-﻿# JA / DodaiOS — Relatório Técnico
+# JA / DodaiOS — Relatório Técnico
 
 Atualizado em: 02/11/2026
+
+## Atualização de 02/11/2026
+
+Correções incluídas no código e em `JA-Atualizacao/`. Ainda precisam ser validadas em boot real no Windows.
+
+| Item | Situação |
+|---|---|
+| 2. Regex | Causa corrigida: faixa escapada no source e bundle ASCII no Vite |
+| 3. Encoding | Corrigido nos arquivos afetados e nos scripts PowerShell que causavam a corrupção |
+| 4. Multiusuário | Leitura de perfis e novas tentativas no frontend corrigidas |
+| 6 e 7. Credential lock e event loop | Leitura de tokens fora do event loop nos pontos `async` |
+| 8. Orb | `ui/orb` restaurado na raiz da instalação; o import `ui.orb` está correto |
+| 9. TaskScheduler | Runtime antigo é atualizado pelo instalador |
+| 10. Porta 47821 | Sem alteração: o re-bind é o watchdog funcionando |
+| 13. Source e runtime | Patches levados às duas árvores |
+| 17. Local models | Sem alteração: o autostart cobre só Ollama; `local-openai` usa o LM Studio |
+| 18. Hotkeys | Dependência adicionada |
+| 21. Reinício | `ja_update_auth.py` adicionado e rota do macOS isolada |
+
+O `dist` deste repositório só recebeu o reparo do regex. A nova tela de usuário entra no próximo build.
 
 ## Prioridade atual
 
@@ -502,7 +522,7 @@ principal
 
 Visibilidade:
 
-PRIVATE
+PUBLIC
 
 ---
 

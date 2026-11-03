@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Profile = {
   id: string;
@@ -40,7 +40,7 @@ export function UserSelectorGate({ onSelected }: Props) {
       setProfiles(data.profiles ?? []);
       setError("");
     } catch {
-      setError("NÃ£o foi possÃ­vel carregar os usuÃ¡rios.");
+      setError("Não foi possível carregar os usuários.");
     } finally {
       setLoading(false);
     }
@@ -96,7 +96,7 @@ export function UserSelectorGate({ onSelected }: Props) {
       
     } catch {
       setSelecting(null);
-      setError("NÃ£o foi possÃ­vel abrir este usuÃ¡rio.");
+      setError("Não foi possível abrir este usuário.");
     }
   }
 
@@ -104,7 +104,7 @@ export function UserSelectorGate({ onSelected }: Props) {
     const cleanName = name.trim();
 
     if (!cleanName) {
-      setError("Digite o nome do usuÃ¡rio.");
+      setError("Digite o nome do usuário.");
       return;
     }
 
@@ -134,7 +134,7 @@ export function UserSelectorGate({ onSelected }: Props) {
 
       setScreen("select");
     } catch {
-      setError("NÃ£o foi possÃ­vel criar o usuÃ¡rio.");
+      setError("Não foi possível criar o usuário.");
     } finally {
       setCreating(false);
     }
@@ -153,7 +153,7 @@ export function UserSelectorGate({ onSelected }: Props) {
             }}
             className="mb-8 text-sm text-white/50 transition hover:text-white"
           >
-            â† Voltar
+            ← Voltar
           </button>
 
           <div className="mb-8">
@@ -162,7 +162,7 @@ export function UserSelectorGate({ onSelected }: Props) {
             </div>
 
             <h1 className="mt-4 text-4xl font-semibold tracking-tight">
-              Adicionar usuÃ¡rio
+              Adicionar usuário
             </h1>
 
             <p className="mt-3 text-sm text-white/45">
@@ -180,12 +180,12 @@ export function UserSelectorGate({ onSelected }: Props) {
               autoFocus
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="Nome do usuÃ¡rio"
+              placeholder="Nome do usuário"
               className="mt-2 w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-4 text-white outline-none transition placeholder:text-white/20 focus:border-white/30"
             />
 
             <label className="mt-6 block text-sm text-white/60">
-              Tipo de usuÃ¡rio
+              Tipo de usuário
             </label>
 
             <div className="mt-2 grid grid-cols-2 gap-3">
@@ -199,7 +199,7 @@ export function UserSelectorGate({ onSelected }: Props) {
                     : "border-white/10 bg-white/[0.03]"
                 }`}
               >
-                <div className="font-medium">UsuÃ¡rio</div>
+                <div className="font-medium">Usuário</div>
                 <div className="mt-1 text-xs text-white/40">
                   Perfil pessoal
                 </div>
@@ -234,7 +234,7 @@ export function UserSelectorGate({ onSelected }: Props) {
               onClick={() => void createUser()}
               className="mt-7 w-full rounded-2xl bg-white px-5 py-4 font-semibold text-black transition hover:bg-white/90 disabled:opacity-40"
             >
-              {creating ? "Criandoâ€¦" : "Criar usuÃ¡rio"}
+              {creating ? "Criando…" : "Criar usuário"}
             </button>
 
           </div>
@@ -254,18 +254,18 @@ export function UserSelectorGate({ onSelected }: Props) {
           </div>
 
           <h1 className="mt-4 text-4xl font-semibold tracking-tight">
-            Quem estÃ¡ usando?
+            Quem está usando?
           </h1>
 
           <p className="mt-3 text-sm text-white/45">
-            Selecione um usuÃ¡rio para continuar.
+            Selecione um usuário para continuar.
           </p>
 
         </div>
 
         {loading ? (
           <div className="text-center text-white/40">
-            Carregando usuÃ¡riosâ€¦
+            Carregando usuários…
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -291,10 +291,10 @@ export function UserSelectorGate({ onSelected }: Props) {
 
                     <div className="mt-1 text-xs text-white/35">
                       {selecting === profile.id
-                        ? "Entrandoâ€¦"
+                        ? "Entrando…"
                         : profile.role === "administrator"
                           ? "Administrador"
-                          : "UsuÃ¡rio"}
+                          : "Usuário"}
                     </div>
                   </div>
 
@@ -318,7 +318,7 @@ export function UserSelectorGate({ onSelected }: Props) {
 
                 <div>
                   <div className="text-lg font-medium">
-                    Mais usuÃ¡rios
+                    Mais usuários
                   </div>
 
                   <div className="mt-1 text-xs text-white/35">

@@ -33,7 +33,7 @@ export function starterCopy(t: T, starter: Starter): StarterCopy {
 }
 
 function fold(text: string): string {
-  return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
 
 /** Starters in `area` whose name, outcome or tools match every word of `query`. */

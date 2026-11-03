@@ -430,6 +430,25 @@ def scope_origin_is_trusted(
         return False
     if origin == _scope_origin(scope):
         return True
+
+    # JA: pywebview may load the desktop UI through localhost while the
+    # backend resolves through 127.0.0.1, or vice versa.
+    try:
+        from urllib.parse import urlsplit
+
+        raw_origin = urlsplit(values[0])
+        origin_host = (raw_origin.hostname or "").lower()
+
+        server = scope.get("server") or ("", 0)
+        server_host = str(server[0] or "").lower()
+
+        loopbacks = {"localhost", "127.0.0.1", "::1"}
+
+        if origin_host in loopbacks and server_host in loopbacks:
+            return True
+
+    except Exception:
+        pass
     return origin in _trusted_origin_values(
         trusted_origins=trusted_origins,
         public_urls=public_urls,

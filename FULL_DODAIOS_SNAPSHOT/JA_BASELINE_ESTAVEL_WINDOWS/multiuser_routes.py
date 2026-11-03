@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import subprocess
 
 import json
@@ -82,7 +82,7 @@ def activate(profile_id: str):
 
     ACTIVE.chmod(0o600)
 
-    # Atualiza tambÃ©m o ambiente do processo atual.
+    # Atualiza também o ambiente do processo atual.
     os.environ["DODAIOS_MULTIUSER"] = "1"
     os.environ["DODAIOS_PROFILE"] = profile_id
     os.environ["DODAIOS_PROFILE_DIR"] = str(profile_dir)
@@ -122,7 +122,7 @@ async def create_profile(payload: CreateProfile):
     name = payload.display_name.strip()
 
     if not name:
-        raise HTTPException(status_code=400, detail="Informe o nome do usuÃ¡rio.")
+        raise HTTPException(status_code=400, detail="Informe o nome do usuário.")
 
     profile_id = safe_id(name)
     base_id = profile_id
@@ -173,7 +173,7 @@ async def create_profile(payload: CreateProfile):
 
 @router.post("/restart")
 def restart_dodaios():
-    """Reinicia a instÃ¢ncia local do DodaiOS pelo LaunchAgent do macOS."""
+    """Reinicia a instância local do DodaiOS pelo LaunchAgent do macOS."""
     import os
 
     uid = os.getuid()

@@ -201,7 +201,7 @@ export const QUICK_SWITCH_ENTRIES: readonly QuickSwitchEntry[] = [
 export function normalizeQuery(value: string): string {
   return value
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/\{name\}/g, "")
     .toLowerCase()
     .trim();

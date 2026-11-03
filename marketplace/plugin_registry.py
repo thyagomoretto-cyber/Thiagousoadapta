@@ -232,7 +232,7 @@ class PluginToolRegistry:
             if self._stopping:
                 return
             client = self._clients.get(plugin_id)
-            tokens = self._store.load(plugin_id)
+            tokens = await asyncio.to_thread(self._store.load, plugin_id)
             if (
                 getattr(client, "uses_dynamic_http_auth", False)
                 and client.is_healthy
@@ -304,7 +304,7 @@ class PluginToolRegistry:
             if plugin_id in self._clients or plugin_id not in self._last_errors:
                 return
             try:
-                tokens = self._store.load(plugin_id)
+                tokens = await asyncio.to_thread(self._store.load, plugin_id)
                 if tokens is None or tokens.needs_reauth:
                     return
                 await _retry_connection_permit()
@@ -409,7 +409,7 @@ class PluginToolRegistry:
             # refresh_plugin, which clears the entry first.
             return
         try:
-            tokens = self._store.load(plugin.id)
+            tokens = await asyncio.to_thread(self._store.load, plugin.id)
         except Exception as exc:  # noqa: BLE001 — corrupt token must not nuke the rest
             log.warning("plugin-registry: token load failed for %s: %s", plugin.id, exc)
             return
@@ -460,7 +460,7 @@ class PluginToolRegistry:
 
             fresh_tokens: Any | None = None
             try:
-                fresh_tokens = self._store.load(plugin.id)
+                fresh_tokens = await asyncio.to_thread(self._store.load, plugin.id)
                 fresh_resolved = (
                     plugin_to_mcp_server_spec(plugin, fresh_tokens)
                     if fresh_tokens is not None

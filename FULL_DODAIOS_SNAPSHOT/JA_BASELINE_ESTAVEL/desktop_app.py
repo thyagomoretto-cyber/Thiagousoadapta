@@ -1,4 +1,4 @@
-﻿"""Desktop app wrapper: pywebview window + FastAPI backend lifecycle.
+"""Desktop app wrapper: pywebview window + FastAPI backend lifecycle.
 
 Coordinates:
   1. Single-instance lock (filelock + PID sidecar + stale detection).
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 # is "Dodaios Dev", so neither instance ever raises the other's window.
 WINDOW_TITLE = current_instance().display_name
 
-# True while the WebView shows the app's own document â€” booted or still
+# True while the WebView shows the app's own document — booted or still
 # booting. A stale error body has no ``#root``. See ``_reload_window_if_stale``.
 _SPA_DOCUMENT_PROBE = "document.getElementById('root') !== null"
 
@@ -61,7 +61,7 @@ if sys.platform == "win32":
         # No shortcut write on the import path: a headless boot, `jarvis <group>`
         # and the test suite all import this module, and an import is no promise
         # of a window. Rewriting the Start-Menu entry from here pointed it at
-        # whichever interpreter imported the module last â€” silently killing the
+        # whichever interpreter imported the module last — silently killing the
         # Windows Search launch when that interpreter had no pywebview. The
         # entry is claimed where a window is actually created (launcher.py).
         ensure_windows_app_identity(write_shortcut=False)
@@ -79,7 +79,7 @@ LOCK_FILE_PATH = DATA_DIR / "jarvis.lock"
 
 # Every window that shows the app must let people select text with the mouse.
 #
-# This is not a preference â€” it repairs a default. pywebview's ``create_window``
+# This is not a preference — it repairs a default. pywebview's ``create_window``
 # takes ``text_select=False`` unless told otherwise, and on that default it
 # injects ``body {user-select: none; cursor: default}`` into every page it
 # loads, on all three platforms. The whole app then behaves like a kiosk: no
@@ -90,7 +90,7 @@ LOCK_FILE_PATH = DATA_DIR / "jarvis.lock"
 #
 # Spread into the kwargs of every window created here so no future window can
 # quietly inherit the kiosk again. The page still decides where selection is
-# unwanted (chrome, buttons) in its own CSS â€” that belongs to the UI, not to
+# unwanted (chrome, buttons) in its own CSS — that belongs to the UI, not to
 # the window frame.
 TEXT_SELECTABLE: dict[str, Any] = {"text_select": True}
 
@@ -98,13 +98,13 @@ TEXT_SELECTABLE: dict[str, Any] = {"text_select": True}
 # window-title label. Sections never get their own window: they are arranged
 # side by side inside the main window instead (the tiling layout, see
 # ``frontend/src/store/tiling.ts``). Labels are stable English names, NOT the
-# wake-word brand â€” the window title is a compatibility contract (see
+# wake-word brand — the window title is a compatibility contract (see
 # ``dodaios/core/branding.py``).
 DETACHABLE_VIEWS: dict[str, str] = {
     "appshot-editor": "Appshot Editor",
     # The Jarvis X annotation editor. Never a section of the main window: it
     # opens from a capture's thumbnail card or the library, always on one
-    # item (``&item=<id>``), and ONE editor window is reused â€” opening another
+    # item (``&item=<id>``), and ONE editor window is reused — opening another
     # capture navigates it instead of stacking windows (open_jarvisx_editor).
     "jarvisx-editor": "Dodaios X Editor",
 }
@@ -120,7 +120,7 @@ _REALTIME_WARM_DELAY_S = 5.0
 
 #: How long the warm waits for voice to report itself usable before warming
 #: anyway. Voice never becoming usable is normal on a host with no microphone,
-#: and the browser/bridge surfaces can still place a call there â€” so the gate
+#: and the browser/bridge surfaces can still place a call there — so the gate
 #: bounds the wait instead of cancelling the warm.
 _REALTIME_WARM_VOICE_GATE_S = 45.0
 
@@ -132,7 +132,7 @@ _REALTIME_WARM_MIN_INTERVAL_S = 20.0
 
 #: How long the backend must have been serving before its death is treated as
 #: an accident worth recovering from (see ``_note_backend_stopped``). Below
-#: this it reads as a boot failure â€” the fresh process would hit the same wall
+#: this it reads as a boot failure — the fresh process would hit the same wall
 #: and relaunch again, so the app stays down and says why instead. Comfortably
 #: above a full cold boot, including model prefetch on a cold disk.
 _BACKEND_MIN_UPTIME_FOR_RECOVERY_S = 120.0
@@ -143,7 +143,7 @@ _SHUTDOWN_FORCE_EXIT_MIN_S = 45.0
 
 
 def _clamp_pet_scale(value: object) -> float:
-    """``[ui] pet_scale`` as a usable multiplier: 0.5â€“2.0, 1.0 when unusable."""
+    """``[ui] pet_scale`` as a usable multiplier: 0.5–2.0, 1.0 when unusable."""
     import math
 
     try:
@@ -173,7 +173,7 @@ def _cached_orb_window(cache: dict[str, Any]) -> Any | None:
 
 
 def _recache_surface(cache: dict[str, Any], surface: Any, style: str) -> None:
-    """Key ``surface`` under ``style`` only â€” one window, one cache entry."""
+    """Key ``surface`` under ``style`` only — one window, one cache entry."""
     for key in [k for k, v in cache.items() if v is surface]:
         cache.pop(key, None)
     cache[style] = surface
@@ -184,7 +184,7 @@ def boot_overlay_style(configured: str | None, *, instance: Any | None = None) -
 
     The screen is an ambient duty (``dodaios.core.instance``): only the default
     app draws the Jarvis Bar / orb. A dev instance beside it would put a second
-    bar on the very same spot â€” and, both apps reading ONE ``jarvis.toml``,
+    bar on the very same spot — and, both apps reading ONE ``jarvis.toml``,
     switching that duplicate off persisted ``orb_style = "none"`` and took the
     default app's bar away on its next restart (2026-08-23). So a non-default
     instance always boots the NullOverlay, at runtime only: the configured
@@ -310,8 +310,8 @@ class SingleInstanceError(RuntimeError):
 # launcher can install them BEFORE this module (and the config graph it drags
 # in) is imported. Re-exported here: the names are part of this module's
 # surface for tests and for the crash hooks below.
-from dodaios.ui.desktop_log import (  # noqa: E402 â€” keep the section grouping
-    _AsyncLogWriter,  # noqa: F401 â€” re-exported for tests
+from dodaios.ui.desktop_log import (  # noqa: E402 — keep the section grouping
+    _AsyncLogWriter,  # noqa: F401 — re-exported for tests
     _install_desktop_log_sink,
 )
 
@@ -322,7 +322,7 @@ def _build_crash_hooks(previous_thread_hook: Any, previous_main_hook: Any) -> tu
     """Build the ``(threading.excepthook, sys.excepthook)`` pair.
 
     Split out from the installer so the behaviour can be tested without
-    swapping two process-wide hooks â€” a test that does that leaks into every
+    swapping two process-wide hooks — a test that does that leaks into every
     test after it.
     """
     from loguru import logger
@@ -332,13 +332,13 @@ def _build_crash_hooks(previous_thread_hook: Any, previous_main_hook: Any) -> tu
         # with no traceback. That is an exit, not a crash.
         if args.exc_type is not SystemExit:
             logger.opt(exception=(args.exc_type, args.exc_value, args.exc_traceback)).critical(
-                "Thread '{}' died on an unhandled exception â€” whatever it was "
+                "Thread '{}' died on an unhandled exception — whatever it was "
                 "serving is gone for the rest of this process.",
                 getattr(args.thread, "name", "<unnamed>"),
             )
         try:
             previous_thread_hook(args)
-        except Exception:  # noqa: BLE001, S110 â€” the fallback reporter is
+        except Exception:  # noqa: BLE001, S110 — the fallback reporter is
             # best-effort; we already have the line that matters.
             pass
 
@@ -349,7 +349,7 @@ def _build_crash_hooks(previous_thread_hook: Any, previous_main_hook: Any) -> tu
             )
         try:
             previous_main_hook(exc_type, exc_value, exc_tb)
-        except Exception:  # noqa: BLE001, S110 â€” see above.
+        except Exception:  # noqa: BLE001, S110 — see above.
             pass
 
     return _thread_hook, _main_hook
@@ -360,14 +360,14 @@ def _install_crash_hooks() -> None:
 
     The sink above only catches what someone *logs*. An exception that escapes
     a thread's target goes to :data:`threading.excepthook`, and one that
-    escapes the main thread goes to :data:`sys.excepthook` â€” both of which
+    escapes the main thread goes to :data:`sys.excepthook` — both of which
     print to ``sys.stderr``, which ``pythonw.exe`` does not have. So the
     loudest failure this app can suffer is also its quietest one.
 
     That is exactly how the backend can end mid-session and leave nothing
     behind but the pending tasks asyncio destroys on the way out: the window
     stays up, every socket is gone, the sidebar flips to OFFLINE, and the log
-    holds no reason at all (live incident 2026-08-09, 15:44:45 â€” eighteen
+    holds no reason at all (live incident 2026-08-09, 15:44:45 — eighteen
     "Task was destroyed but it is pending" lines and not one word of cause).
 
     Both hooks chain to whatever was installed before, so a debugger's own
@@ -395,7 +395,7 @@ def _pid_alive(pid: int) -> bool:
     """True if the PID currently denotes a running process.
 
     Uses psutil (from the Phase-0 deps). Gotcha: a freshly terminated PID
-    can get reused by a completely different process â€” unlikely given
+    can get reused by a completely different process — unlikely given
     Jarvis's short process lifetime, but we'd additionally check the
     process name if psutil helps with that.
     """
@@ -444,7 +444,7 @@ def _log_input_isolation() -> None:
     it lasts, Windows silently discards synthetic keystrokes and automation
     queries from ordinary user software, so dictation apps, text expanders, and
     password-manager auto-type stop working INSIDE our window with no error on
-    either side. Without this line a support log gives no hint at all â€” the
+    either side. Without this line a support log gives no hint at all — the
     2026-07-25 report reached us as "dictation just doesn't work in Jarvis".
 
     Runs on the background heavy-init task, never the startup critical path
@@ -466,7 +466,7 @@ def _log_input_isolation() -> None:
             )
         else:
             logger.debug("Input isolation clear (reason={}).", report.reason)
-    except Exception:  # noqa: BLE001, S110 â€” never let a diagnostic break boot
+    except Exception:  # noqa: BLE001, S110 — never let a diagnostic break boot
         pass
 
 
@@ -475,7 +475,7 @@ def _read_meta() -> dict[str, Any] | None:
     try:
         raw = META_FILE_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
-        # No sidecar means no running instance â€” the normal first-start case.
+        # No sidecar means no running instance — the normal first-start case.
         return None
     except OSError:
         # Unreadable is treated as absent: the caller's next step (probe the
@@ -565,7 +565,7 @@ def _pid_listening_on_port_psutil(port: int) -> int | None:
         return None
     try:
         connections = psutil.net_connections(kind="inet")
-    except Exception:  # noqa: BLE001 â€” AccessDenied / platform limits
+    except Exception:  # noqa: BLE001 — AccessDenied / platform limits
         return None
     listen = getattr(psutil, "CONN_LISTEN", "LISTEN")
     for conn in connections:
@@ -589,7 +589,7 @@ def _pid_listening_on_port_netstat(port: int) -> int | None:
 
         from dodaios.core.process_utils import NO_WINDOW_CREATIONFLAGS
 
-        completed = subprocess.run(  # noqa: S603 â€” fixed argv, port is an int
+        completed = subprocess.run(  # noqa: S603 — fixed argv, port is an int
             ["netstat", "-ano", "-p", "tcp"],
             capture_output=True,
             text=True,
@@ -638,7 +638,7 @@ def _focus_response_means_window_raised(response: Any) -> bool:
         return False
     try:
         payload = response.json()
-    except Exception:  # noqa: BLE001 â€” a 2xx with no JSON still counts
+    except Exception:  # noqa: BLE001 — a 2xx with no JSON still counts
         return True
     if not isinstance(payload, dict):
         return True
@@ -664,7 +664,7 @@ def _focus_request_headers(port: int) -> dict[str, str]:
         from dodaios.core.control_key import get_control_key
 
         key = get_control_key()
-    except Exception:  # noqa: BLE001 â€” a missing key must not block focusing
+    except Exception:  # noqa: BLE001 — a missing key must not block focusing
         key = None
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -680,7 +680,7 @@ def _focus_existing_instance() -> bool:
     """Asks the running instance to bring its window to the front.
 
     Reads the port from the meta sidecar and POSTs to ``/api/window/focus``.
-    The endpoint can still return 404 in Phase 1a â€” in that case we return
+    The endpoint can still return 404 in Phase 1a — in that case we return
     a friendly False instead of crashing.
     """
     meta = _read_meta()
@@ -767,7 +767,7 @@ def _focus_response_summary(response: Any) -> str:
     """The reply's ``focused``/``shown``/``reason`` fields, for the launch log."""
     try:
         payload = response.json()
-    except Exception:  # noqa: BLE001 â€” a reply without JSON has nothing to show
+    except Exception:  # noqa: BLE001 — a reply without JSON has nothing to show
         return "(no JSON body)"
     if not isinstance(payload, dict):
         return "(no JSON object)"
@@ -779,7 +779,7 @@ def _focus_response_reason(response: Any) -> str:
     """The ``reason`` a focus reply carries, or ``""`` when it has none."""
     try:
         payload = response.json()
-    except Exception:  # noqa: BLE001 â€” a reply without JSON has no reason
+    except Exception:  # noqa: BLE001 — a reply without JSON has no reason
         return ""
     if not isinstance(payload, dict):
         return ""
@@ -856,8 +856,8 @@ def _window_answers(hwnd: int, user32: Any, *, timeout_ms: int = _WINDOW_ANSWER_
 
     ``ShowWindow``, ``MoveWindow``, ``SetWindowPos`` and ``AttachThreadInput``
     on another thread's window are synchronous: they wait, without a timeout,
-    until that thread pumps its queue. A window whose GUI thread is stuck â€” a
-    quit tearing WebView2 down on a machine that is paging â€” held a second
+    until that thread pumps its queue. A window whose GUI thread is stuck — a
+    quit tearing WebView2 down on a machine that is paging — held a second
     launch inside those calls for 92 s on 2026-09-30 while the user saw
     nothing. ``SendMessageTimeoutW(WM_NULL)`` asks the same question with a
     deadline, so a hung window costs seconds, not minutes.
@@ -880,7 +880,7 @@ def _window_answers(hwnd: int, user32: Any, *, timeout_ms: int = _WINDOW_ANSWER_
                 byref(answer),
             )
         )
-    except Exception:  # noqa: BLE001 â€” a probe that cannot run is no proof of a hang
+    except Exception:  # noqa: BLE001 — a probe that cannot run is no proof of a hang
         return True
 
 
@@ -900,7 +900,7 @@ def window_needs_restore(title: str) -> bool:
     """Whether raising the window titled ``title`` must restore it first.
 
     ``True`` for a minimized or hidden window, and wherever it cannot be told
-    (other OSes, no such window). ``False`` for a visible one â€” restoring
+    (other OSes, no such window). ``False`` for a visible one — restoring
     that would turn a maximized window back into its smaller normal size.
     """
     if sys.platform != "win32":
@@ -986,7 +986,7 @@ def detached_window_size(view: str, screen: tuple[int, int] | None) -> tuple[int
     """Opening size of a detached window.
 
     The appshot editor opens in compact proportions: about two fifths of
-    the screen's width and a little under half its height, centred â€” a tool
+    the screen's width and a little under half its height, centred — a tool
     window in front of the app, never one that looks like the app shrunk. It
     never goes below the size its whole toolbar needs. Every other view keeps
     the compact default.
@@ -1017,8 +1017,8 @@ def _repaint_webview_shown_from_hidden(window: Any) -> None:
 
     On Windows the editor window is created hidden so the first click is
     instant. WebView2 builds its surface while that form is hidden, then
-    ``show()`` reveals a blank frame â€” the window's own background, with none
-    of the page â€” until the form's size actually changes. One pixel out and
+    ``show()`` reveals a blank frame — the window's own background, with none
+    of the page — until the form's size actually changes. One pixel out and
     back is enough. Other platforms paint on show, so this is a no-op there.
     """
     if sys.platform != "win32":
@@ -1055,7 +1055,7 @@ def _bring_window_to_front_by_title(title: str) -> bool:
     """Win32 fallback for hidden/minimized pywebview windows.
 
     pywebview does not reliably pass through ``window.show() + restore()``
-    when the window was previously hidden via a tray close â€” Edge/WebView2
+    when the window was previously hidden via a tray close — Edge/WebView2
     keeps the HWND minimized. ``ShowWindow(SW_RESTORE) + SetForegroundWindow``
     via the Win32 API path is the only reliable recovery.
 
@@ -1070,7 +1070,7 @@ def _bring_window_to_front_by_title(title: str) -> bool:
 
         # A private WinDLL instance, not ctypes.windll.user32: setting
         # pointer-sized argtypes on the shared object corrupts every other
-        # caller in the process â€” including pywebview's own SetWindowPos
+        # caller in the process — including pywebview's own SetWindowPos
         # calls, which rely on it staying argtypes-free.
         user32 = ctypes.WinDLL("user32", use_last_error=True)
         user32.FindWindowW.restype = wintypes.HWND
@@ -1130,7 +1130,7 @@ def _bring_window_to_front_by_title(title: str) -> bool:
             from loguru import logger
 
             logger.warning(
-                "Window {!r} is not responding â€” left alone instead of waiting on it.",
+                "Window {!r} is not responding — left alone instead of waiting on it.",
                 title,
             )
             return False
@@ -1230,9 +1230,9 @@ def _console_owned_exclusively(console_hwnd: int, attached_process_count: int) -
     confuses users (forensic 2026-07-08: a test laptop's autostart launched
     ``python.exe``).
 
-    A console shared with another process (count >= 2) belongs to the *user* â€” a
+    A console shared with another process (count >= 2) belongs to the *user* — a
     developer who ran us from their terminal, or ``run.bat --debug`` where
-    ``cmd.exe`` stays attached â€” and must never be hidden.
+    ``cmd.exe`` stays attached — and must never be hidden.
     """
     return bool(console_hwnd) and attached_process_count == 1
 
@@ -1269,7 +1269,7 @@ def hide_accidental_console(
     """Hide a console window this GUI app accidentally, exclusively owns.
 
     Returns ``True`` iff a console was hidden. Windows-only; a clean no-op on
-    macOS/Linux (no console-subsystem split exists there â€” a GUI app launched
+    macOS/Linux (no console-subsystem split exists there — a GUI app launched
     from Finder/dock has no controlling terminal, and one launched from a real
     terminal is *meant* to log there) and whenever the app already runs
     windowless under ``pythonw.exe`` (``GetConsoleWindow`` returns 0).
@@ -1289,12 +1289,12 @@ def hide_accidental_console(
 
         hwnd = get_console_window()
         if not hwnd:
-            return False  # pythonw / no console â€” nothing to hide
+            return False  # pythonw / no console — nothing to hide
         if not _console_owned_exclusively(hwnd, count_attached()):
-            return False  # a shell shares it (dev terminal / --debug) â€” leave it
+            return False  # a shell shares it (dev terminal / --debug) — leave it
         hide_window(hwnd)
         return True
-    except Exception:  # noqa: BLE001 â€” console cosmetics must never break boot
+    except Exception:  # noqa: BLE001 — console cosmetics must never break boot
         return False
 
 
@@ -1334,12 +1334,12 @@ async def _await_cancellable_chat_turn(
     so the inner task ends cancelled in BOTH cases. The reliable signal is whether
     *this* coroutine's own task carries a pending cancellation:
 
-    * the X cancels only the INNER ``task`` (via ``cancel_active_chat_turn`` â†’
+    * the X cancels only the INNER ``task`` (via ``cancel_active_chat_turn`` →
       ``call_soon_threadsafe(task.cancel)``); our own task is untouched
-      (``current_task().cancelling() == 0``) â†’ we return ``_CHAT_TURN_ABORTED``
+      (``current_task().cancelling() == 0``) → we return ``_CHAT_TURN_ABORTED``
       so the caller drops to IDLE; and
     * an OUTER cancellation (shutdown / bus-gather teardown) cancels *our* task
-      (``cancelling() > 0``) â†’ we re-raise, honouring Python's cooperative
+      (``cancelling() > 0``) → we re-raise, honouring Python's cooperative
       -cancellation contract (the inner task is already cancelled with us).
     """
     from dodaios.core import runtime_refs
@@ -1351,14 +1351,14 @@ async def _await_cancellable_chat_turn(
     except asyncio.CancelledError:
         current = asyncio.current_task()
         if current is not None and current.cancelling() > 0:
-            raise  # our own task is being torn down â€” propagate
-        return _CHAT_TURN_ABORTED  # only the inner turn was cancelled â€” the X
+            raise  # our own task is being torn down — propagate
+        return _CHAT_TURN_ABORTED  # only the inner turn was cancelled — the X
     finally:
         runtime_refs.clear_active_chat_turn(task)
 
 
 # ---------------------------------------------------------------------------
-# WebView profile â€” where the embedded browser keeps its site data
+# WebView profile — where the embedded browser keeps its site data
 # ---------------------------------------------------------------------------
 
 #: The embedded browser's profile directory, relative to the data directory.
@@ -1374,20 +1374,20 @@ def webview_storage_dir(
 
     pywebview starts in ``private_mode`` by default: the WebView2 profile lives
     in a fresh ``%TEMP%\tmpXXXX`` folder that nobody deletes, and everything the
-    frontend keeps in ``localStorage`` â€” the deck/classic surface, pane sizes,
+    frontend keeps in ``localStorage`` — the deck/classic surface, pane sizes,
     favourites, the theme cache the boot script paints the
-    first frame from â€” dies with the process (forensic 2026-08-18: light chrome
+    first frame from — dies with the process (forensic 2026-08-18: light chrome
     on the dark bundled artwork after every restart, because the light pick was
     gone while the theme itself survived on the backend). The profile therefore
     lives in a fixed directory next to the other per-checkout state, and the
     same call persists it on every backend pywebview has (Edge, WebKitGTK, Qt,
-    Cocoa) â€” see ``docs/os-parity.md``.
+    Cocoa) — see ``docs/os-parity.md``.
 
     Per checkout on purpose (``DATA_DIR``, like the single-instance lock): two
     checkouts running side by side must not fight over one browser profile. A
     read-only checkout falls back to the per-user data directory, exactly like
     the credential store does; if neither can be created the caller keeps
-    pywebview's private mode â€” a layout that does not survive a restart is not
+    pywebview's private mode — a layout that does not survive a restart is not
     worth failing the boot over.
     """
     candidates: list[Path] = [
@@ -1405,7 +1405,7 @@ def webview_storage_dir(
             if os.access(candidate, os.W_OK):
                 return candidate
         except OSError:
-            continue  # unwritable candidate â€” try the next; the caller warns when none is left
+            continue  # unwritable candidate — try the next; the caller warns when none is left
     return None
 
 
@@ -1417,15 +1417,15 @@ def webview_storage_dir(
 def _default_lock_holder_health(port: int) -> bool:
     """True if a Jarvis webserver answers ``/api/health`` on *port* (loopback).
 
-    Retries briefly so a still-booting fast-boot instance â€” which binds + answers
-    health in well under a second â€” is NEVER mistaken for a dead one. Returns the
-    SAFE default (``True`` â†’ "treat as alive, do not evict") whenever it cannot
+    Retries briefly so a still-booting fast-boot instance — which binds + answers
+    health in well under a second — is NEVER mistaken for a dead one. Returns the
+    SAFE default (``True`` → "treat as alive, do not evict") whenever it cannot
     probe at all (no httpx), so a probing failure can never cause an eviction.
     """
     try:
         import httpx
     except Exception:  # noqa: BLE001
-        return True  # cannot probe â†’ never evict on uncertainty
+        return True  # cannot probe → never evict on uncertainty
     url = f"http://127.0.0.1:{int(port)}/api/health"
     for _ in range(4):
         try:
@@ -1435,12 +1435,12 @@ def _default_lock_holder_health(port: int) -> bool:
         except httpx.ConnectError:
             # Nothing accepts on the port: the lock-zombie signature (its
             # accept socket died while the process lived on). Probe again
-            # briefly â€” a fast-boot instance binds within the second.
+            # briefly — a fast-boot instance binds within the second.
             pass
-        except Exception:  # noqa: BLE001 â€” connected, but no answer in time
+        except Exception:  # noqa: BLE001 — connected, but no answer in time
             # The port IS bound and merely slow: an instance in its heavy
             # initialisation (or under a GIL stall) can miss a 1 s deadline
-            # four times in a row. That is a busy holder, never a zombie â€”
+            # four times in a row. That is a busy holder, never a zombie —
             # evicting it would kill a working app (live 2026-08-25: a second
             # launch during boot waited 6 s here and would have been one probe
             # away from terminating the instance it was meant to focus).
@@ -1450,14 +1450,14 @@ def _default_lock_holder_health(port: int) -> bool:
 
 
 def _kill_process_tree_win32(pid: int) -> bool:
-    """``taskkill /F /T`` â€” the OS-level fallback when psutil's kill did not take.
+    """``taskkill /F /T`` — the OS-level fallback when psutil's kill did not take.
 
     A wedged instance usually has children (a local inference server, a
     terminal pane's ConPTY host, a browser helper) and it is often one of THOSE
     holding the handle that keeps the parent from dying. ``taskkill /T`` ends
     the whole tree at once. Windows only; elsewhere the caller's psutil path is
     already the strongest tool available. Returns True when the command ran and
-    reported success â€” the caller still re-checks liveness.
+    reported success — the caller still re-checks liveness.
     """
     if sys.platform != "win32":
         return False
@@ -1466,7 +1466,7 @@ def _kill_process_tree_win32(pid: int) -> bool:
 
         from dodaios.core.process_utils import NO_WINDOW_CREATIONFLAGS
 
-        completed = subprocess.run(  # noqa: S603 â€” fixed argv, pid is an int
+        completed = subprocess.run(  # noqa: S603 — fixed argv, pid is an int
             ["taskkill", "/F", "/T", "/PID", str(int(pid))],
             capture_output=True,
             text=True,
@@ -1488,9 +1488,9 @@ def _kill_process_tree_win32(pid: int) -> bool:
 def _terminate_pid(pid: int, *, _tree_kill=_kill_process_tree_win32) -> bool:
     """Terminate a confirmed lock-zombie process. Returns True once it is gone.
 
-    Graceful ``terminate()`` first, then ``kill()`` if it lingers, then â€” on
-    Windows â€” ``taskkill /F /T`` for the whole process tree (see
-    :func:`_kill_process_tree_win32`). Returns False (â†’ the caller keeps the
+    Graceful ``terminate()`` first, then ``kill()`` if it lingers, then — on
+    Windows — ``taskkill /F /T`` for the whole process tree (see
+    :func:`_kill_process_tree_win32`). Returns False (→ the caller keeps the
     lock blocked, the SAFE outcome) when psutil is missing or nothing took, so
     we never falsely report a still-living process as evicted. Every step is
     logged: this runs before the window exists, and the log file is the only
@@ -1516,7 +1516,7 @@ def _terminate_pid(pid: int, *, _tree_kill=_kill_process_tree_win32) -> bool:
         proc.terminate()
         try:
             proc.wait(timeout=5.0)
-        except Exception:  # noqa: BLE001 â€” graceful timed out â†’ hard kill
+        except Exception:  # noqa: BLE001 — graceful timed out → hard kill
             logger.warning("lock holder pid={} survived terminate(); kill()", pid)
             with suppress(Exception):
                 proc.kill()
@@ -1548,7 +1548,7 @@ def acquire_single_instance_lock(
     the lock + sidecar and try again.
 
     Lock-zombie eviction (forensic 2026-06-26): a holder PID can be ALIVE yet
-    non-functional â€” its webserver accept-socket died on a transient WinError 64
+    non-functional — its webserver accept-socket died on a transient WinError 64
     while voice/telegram kept the process running, so it holds the lock with no
     bound port and no window and would block EVERY restart. When the holder is
     alive but its admin port does not answer health (probed with retries so a
@@ -1559,9 +1559,9 @@ def acquire_single_instance_lock(
         timeout: Seconds until we give up on the first acquire. Default 0.0.
         lock_path: Override for tests.
         meta_path: Override for tests.
-        health_probe: Override for tests â€” ``(port) -> bool`` health check.
-        terminate: Override for tests â€” ``(pid) -> bool`` process kill.
-        listen_pid: Override for tests â€” ``(port) -> pid`` of the process
+        health_probe: Override for tests — ``(port) -> bool`` health check.
+        terminate: Override for tests — ``(pid) -> bool`` process kill.
+        listen_pid: Override for tests — ``(port) -> pid`` of the process
             bound to that port. Production finds a headless holder that
             never wrote the sidecar.
     """
@@ -1582,7 +1582,7 @@ def acquire_single_instance_lock(
         # below decides whether that holder is real, and reports from there.
         pass
 
-    # Held â€” is the holder still alive?
+    # Held — is the holder still alive?
     meta: dict[str, Any] | None = None
     try:
         raw = mp.read_text(encoding="utf-8")
@@ -1641,7 +1641,7 @@ def acquire_single_instance_lock(
 
             logger.warning(
                 "Dodaios lock held by a LIVE but non-responding instance "
-                "(pid={}, port={} not responding) â€” terminating the lock "
+                "(pid={}, port={} not responding) — terminating the lock "
                 "zombie so this start can proceed.",
                 pid,
                 port,
@@ -1655,9 +1655,9 @@ def acquire_single_instance_lock(
 
     # Stale (dead holder) OR a zombie we just terminated: remove the sidecar
     # and try the lock again. There's no need to clean up the lock file at
-    # the filesystem level â€” filelock uses fcntl/LockFileEx, so as soon as
+    # the filesystem level — filelock uses fcntl/LockFileEx, so as soon as
     # the holder is gone, the lock is free. After a kill, though, Windows
-    # needs a moment to release the lock handle â€” hence several short
+    # needs a moment to release the lock handle — hence several short
     # retries.
     with suppress(Exception):
         mp.unlink(missing_ok=True)
@@ -1682,19 +1682,19 @@ def acquire_single_instance_lock(
 # Conductor is a standalone OSS package that must never import ``jarvis``, so
 # it cannot reach the EventBus itself. It hands out structured facts through
 # the ``on_event`` callback its Runner has always had; THIS side turns them
-# into a sentence and publishes it â€” the same seam every other embedded
+# into a sentence and publishes it — the same seam every other embedded
 # component uses to get the bus.
 #
 # Division of labour: Conductor decides WHETHER a finished run is news
-# (``conductor.core.notify`` â€” state changes only, never every-run chatter);
+# (``conductor.core.notify`` — state changes only, never every-run chatter);
 # Jarvis decides WHAT IS SAID and in WHICH LANGUAGE, so no locale is ever
 # baked into the standalone package.
 
 #: One plain sentence per news kind and locale. No job ids, no exit codes, no
-#: stack traces â€” the user hears the outcome; the technical reason rides along
+#: stack traces — the user hears the outcome; the technical reason rides along
 #: in ``AnnouncementRequested.detail``, which the transcript shows and the
 #: voice never speaks. Runtime voice output is the closed product surface, so
-#: these strings stay localized (CLAUDE.md Â§1).
+#: these strings stay localized (CLAUDE.md §1).
 _CONDUCTOR_NEWS_PHRASES: dict[str, dict[str, str]] = i18n_catalog.nested_table(
     "ui.desktop.conductor_news_phrases"
 )
@@ -1703,7 +1703,7 @@ _CONDUCTOR_NEWS_PHRASES: dict[str, dict[str, str]] = i18n_catalog.nested_table(
 def _conductor_news_sentence(kind: str, job_name: str, language: str) -> str:
     """Render one piece of Conductor news as a plain, speakable sentence.
 
-    Returns ``""`` for an unknown kind or a nameless job â€” an announcement
+    Returns ``""`` for an unknown kind or a nameless job — an announcement
     that cannot say WHICH job it means is worse than no announcement.
     """
     phrases = _CONDUCTOR_NEWS_PHRASES.get(kind)
@@ -1747,8 +1747,8 @@ def _make_conductor_announcer(
             pin = reply_language_ref() or ""
         # A background job has no user turn to read a language off, so the
         # pin wins, then the language the conversation is already running in,
-        # then the default locale â€” resolved through the ONE resolver like
-        # every other output layer (CLAUDE.md Â§1). The empty text is what
+        # then the default locale — resolved through the ONE resolver like
+        # every other output layer (CLAUDE.md §1). The empty text is what
         # makes the conversation stickiness apply.
         language = resolve_output_language(
             pin,
@@ -1773,7 +1773,7 @@ def _make_conductor_announcer(
                     priority="normal",
                     # A readback kind: a job that breaks at 03:00 must still
                     # reach the user with no session open, so it has to
-                    # survive the hangup gate â€” the same choice
+                    # survive the hangup gate — the same choice
                     # ``dodaios/tasks/runner.py`` makes for When-Then results.
                     kind="subagent",
                     detail=str(payload.get("detail") or "").strip() or None,
@@ -1781,7 +1781,7 @@ def _make_conductor_announcer(
             )
             if inspect.isawaitable(result):
                 await result
-        except Exception as exc:  # noqa: BLE001 â€” news is never worth a crash
+        except Exception as exc:  # noqa: BLE001 — news is never worth a crash
             from loguru import logger as _clog
 
             _clog.opt(exception=exc).warning("Conductor announcement could not be published")
@@ -1797,18 +1797,18 @@ def _make_conductor_announcer(
 class _HealthProbeLogFilter(logging.Filter):
     """Drop httpx's INFO line for the loopback ``/api/health`` probe.
 
-    httpx logs one ``HTTP Request: GET â€¦/api/health`` line per call. The
+    httpx logs one ``HTTP Request: GET …/api/health`` line per call. The
     blank-window watchdog probes on a timer for the whole life of the window,
     and that single line was 40 % of everything ``jarvis_desktop.log`` received
-    while idle (2 011 of the last 5 000 lines on 2026-08-22) â€” noise that also
+    while idle (2 011 of the last 5 000 lines on 2026-08-22) — noise that also
     costs the log-writer thread. Only the self-probe is dropped; every other
-    httpx request (providers, Telegram, â€¦) still logs as before.
+    httpx request (providers, Telegram, …) still logs as before.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             message = record.getMessage()
-        except Exception:  # noqa: BLE001 â€” a malformed record is not ours to judge
+        except Exception:  # noqa: BLE001 — a malformed record is not ours to judge
             return True
         return not ("/api/health" in message and "127.0.0.1" in message)
 
@@ -1831,7 +1831,7 @@ def detector_gates_the_backend(pipeline: Any) -> bool:
     The boot gate (``_heavy_backend_bg``) holds the server, brain, MCP,
     workflows and the conductor behind the wake model so the load the user is
     waiting for is not starved by housekeeping. It used to be armed only when
-    voice boot built a local Whisper â€” which left every other detector that
+    voice boot built a local Whisper — which left every other detector that
     loads its own models ungated. ``vosk_kws`` loads one Kaldi model per
     installed language inside ``wake.start()``, so on a cold boot the gate
     released BEFORE the load began and a wiki FTS rebuild, the mission stack
@@ -1840,9 +1840,9 @@ def detector_gates_the_backend(pipeline: Any) -> bool:
 
     Gate on the CAPABILITY, never on an engine name (AP-21):
 
-    * the detector must REPORT warmth â€” without ``is_warm`` there is nothing to
+    * the detector must REPORT warmth — without ``is_warm`` there is nothing to
       wait for and waiting would be a guess;
-    * it must actually be STARTED â€” ``_openwakeword_enabled`` is the same flag
+    * it must actually be STARTED — ``_openwakeword_enabled`` is the same flag
       ``SpeechPipeline._start_wake`` checks, and the pipeline lowers it for a
       non-primary instance, so a second instance never taxes the first's boot.
 
@@ -1892,7 +1892,7 @@ class DesktopApp:
         os.environ[self.cfg.ui.auth_token_env] = self.session_token
 
         # CRITICAL: pythonw.exe has no stderr. Without the file sink we'd see
-        # NO crash in the backend thread â€” the process would then live on
+        # NO crash in the backend thread — the process would then live on
         # silently as a zombie with no bound port 47821. Write a file log to
         # data/jarvis_desktop.log so every crash is visible. Idempotent:
         # calling add() with an identical sink would duplicate it, hence the
@@ -1907,11 +1907,11 @@ class DesktopApp:
         self._backend_thread: threading.Thread | None = None
         self._backend_loop: asyncio.AbstractEventLoop | None = None
         # Set if the backend thread dies during bind (missing click, port
-        # collision, â€¦). ``_wait_for_backend`` reads it so the main thread can
+        # collision, …). ``_wait_for_backend`` reads it so the main thread can
         # name the reason instead of sitting on a 45 s health poll.
         self._backend_boot_error: BaseException | None = None
         # Monotonic stamp of the moment the backend loop began serving, and a
-        # one-shot latch â€” together they gate the automatic recovery in
+        # one-shot latch — together they gate the automatic recovery in
         # _note_backend_stopped so a crash-on-boot can never become a
         # relaunch loop.
         self._backend_serving_since: float | None = None
@@ -1924,13 +1924,13 @@ class DesktopApp:
         # _run_backend). The real app is delegated to it once built.
         self._bootstrap: Any = None
         self._window: Any = None
-        # Guards the window against staying blank in silence â€” a page that never
+        # Guards the window against staying blank in silence — a page that never
         # arrives leaves nothing behind that could report it (see
         # dodaios/ui/window_watchdog.py). Armed right after create_window.
         self._blank_watchdog: Any = None
         # Detached solo windows keyed by view id (see DETACHABLE_VIEWS). Only
         # touched from worker threads (route handlers via asyncio.to_thread,
-        # pywebview event hooks, the tray bridge) â€” never from the asyncio
+        # pywebview event hooks, the tray bridge) — never from the asyncio
         # loop, and never from the GUI MainThread.
         self._detached_windows: dict[str, Any] = {}
         self._detached_open_lock = threading.Lock()
@@ -1943,16 +1943,16 @@ class DesktopApp:
         self._background = BackgroundSession()
         self._main_window_lock = threading.RLock()
         self._webview_persistent_profile = False
-        # Voice stack (pipeline + orb overlay) â€” optional, can be disabled via
+        # Voice stack (pipeline + orb overlay) — optional, can be disabled via
         # ENV JARVIS_VOICE=0. Defaults to on, so "Hey Jarvis" works
         # out-of-the-box when `run.bat` starts the desktop app.
         self._pipeline_task: asyncio.Task | None = None
         self._orb: Any = None
-        # Virtual mouse overlay (Computer-Use). Voice-independent â€” Computer-Use
-        # can be triggered via REST too â€” so it is started separately from the orb.
+        # Virtual mouse overlay (Computer-Use). Voice-independent — Computer-Use
+        # can be triggered via REST too — so it is started separately from the orb.
         self._virtual_cursor: Any = None
         # Jarvis system cursor (SetSystemCursor swap to black-yellow arrow).
-        # Independent of the Tk overlay above â€” the overlay is default-OFF
+        # Independent of the Tk overlay above — the overlay is default-OFF
         # since BUG-030, but the system-cursor swap is the only path that can
         # visually replace the OS cursor (Windows draws it above any window).
         self._jarvis_cursor: Any = None
@@ -2035,10 +2035,10 @@ class DesktopApp:
                             **status, "available": False,
                             "reason": "hidden_window_cleanup_failed",
                         }
-                import webview  # noqa: PLC0415 â€” optional desktop dependency
+                import webview  # noqa: PLC0415 — optional desktop dependency
 
                 keeper = webview.create_window(
-                    f"{WINDOW_TITLE} â€” Background",
+                    f"{WINDOW_TITLE} — Background",
                     html="<!doctype html><html><head><title></title></head><body></body></html>",
                     hidden=True, focus=False, width=1, height=1, min_size=(1, 1),
                     frameless=True, resizable=False, confirm_close=False,
@@ -2157,7 +2157,7 @@ class DesktopApp:
 
         Since 2026-04-21: text chat uses the same BrainManager as the voice
         pipeline (shared bus + shared history). The default provider is
-        ``gemini`` from ``jarvis.toml`` â€” this sidesteps the 429 problem of
+        ``gemini`` from ``jarvis.toml`` — this sidesteps the 429 problem of
         direct OAuth API calls.
 
         Since 2026-04-25: NO MORE MockBrain fallback in the chat path. If
@@ -2165,11 +2165,11 @@ class DesktopApp:
         replies with an honest setup instruction instead of scripted
         canned phrases. User request: no "dumb Jarvis" without an LLM.
         """
-        # NOTE: the heavy imports (build_default_brain â†’ the brain graph,
-        # WebServer â†’ fastapi + every route schema, etc.) are DELIBERATELY NOT
+        # NOTE: the heavy imports (build_default_brain → the brain graph,
+        # WebServer → fastapi + every route schema, etc.) are DELIBERATELY NOT
         # done here. They hold the GIL in long C-level blocks, which would
         # starve the bootstrap loop and delay the UI shell. They are imported
-        # AFTER ``wait_shell_painted`` below â€” i.e. once the window has painted â€”
+        # AFTER ``wait_shell_painted`` below — i.e. once the window has painted —
         # so the visible boot is never blocked by the import storm.
         if prebound is not None:
             # Fast-boot launcher path: the loop already exists and the bootstrap
@@ -2193,12 +2193,12 @@ class DesktopApp:
             from dodaios.core.loop_executor import install_prewarmed_default_executor
 
             self._io_executor = install_prewarmed_default_executor(loop)
-        except Exception:  # noqa: BLE001 â€” a loop that can still stall is the
+        except Exception:  # noqa: BLE001 — a loop that can still stall is the
             # behaviour we shipped yesterday; a boot that fails is not.
             from loguru import logger as _ex_log
 
             _ex_log.opt(exception=True).warning(
-                "Could not install the prewarmed default executor â€” "
+                "Could not install the prewarmed default executor — "
                 "asyncio.to_thread may stall the loop while the pool grows."
             )
             self._io_executor = None
@@ -2207,7 +2207,7 @@ class DesktopApp:
         # stdout unchanged). The desktop window only appears once
         # ``_wait_for_backend`` sees ``/api/health`` 200, which the backend can
         # answer the moment it is serving. BOOT_READY_MS below is therefore the
-        # honest "the window can be created now" anchor â€” the same anchor the
+        # honest "the window can be created now" anchor — the same anchor the
         # headless harness uses (``scripts/measure_desktop_boot.py``).
         _bp = os.environ.get("JARVIS_BOOT_PROFILE") == "1"
         _bp_t0 = time.perf_counter()
@@ -2249,7 +2249,7 @@ class DesktopApp:
         # delegated (the "serve first, init behind" contract). Mirrors the
         # proven headless path (commit 6379222e).
         if _prebound_bootstrap is not None:
-            # Already bound + BOOT_READY emitted by the launcher â€” just adopt it.
+            # Already bound + BOOT_READY emitted by the launcher — just adopt it.
             bootstrap = _prebound_bootstrap
             self._bootstrap = bootstrap
         else:
@@ -2265,7 +2265,7 @@ class DesktopApp:
                 self._backend_boot_error = exc
                 raise
             self._bootstrap = bootstrap
-            _db_boot_ready()  # /api/health is servable now â†’ window can appear
+            _db_boot_ready()  # /api/health is servable now → window can appear
 
         def _log_unhandled_async(loop_: asyncio.AbstractEventLoop, context: dict) -> None:
             exc = context.get("exception")
@@ -2338,10 +2338,10 @@ class DesktopApp:
             from dodaios.plugins.stt import start_wake_model_prefetch
 
             start_wake_model_prefetch(self.cfg.stt, app_cfg=self.cfg)
-        except Exception:  # noqa: BLE001, S110 â€” prefetch never blocks boot
+        except Exception:  # noqa: BLE001, S110 — prefetch never blocks boot
             pass
 
-        # Heavy imports â€” done NOW (after the shell has painted) so their
+        # Heavy imports — done NOW (after the shell has painted) so their
         # GIL-holding C-level work no longer starves the bootstrap loop while
         # the window is still rendering. See the note at the top of _run_backend.
         from dodaios.brain.factory import build_default_brain
@@ -2361,7 +2361,7 @@ class DesktopApp:
         _db_mark("pre_webserver")
         # Build the FastAPI app + all routes (~1 s, CPU-bound) in a worker thread
         # via the running loop, so the loop stays free to answer the bootstrap's
-        # /api/health while it builds â€” that is what lets the window appear at
+        # /api/health while it builds — that is what lets the window appear at
         # bind time rather than after the ~1 s ctor. WebServer.__init__ is
         # loop-agnostic (pure construction + route mounting), so off-loop is safe.
         server = loop.run_until_complete(
@@ -2379,7 +2379,7 @@ class DesktopApp:
 
         _attach_permission_bus(server.bus, loop)
 
-        # Hang the core state off the loop â€” thread-local, referenced only here.
+        # Hang the core state off the loop — thread-local, referenced only here.
         supervisor = Supervisor(bus=server.bus)
         # Persist text chats to data/chats.db (next to sessions.db) so the Chats
         # conversation manager has durable, segmented history across restarts.
@@ -2394,8 +2394,8 @@ class DesktopApp:
 
         turn_traces = TurnTraceCollector(server.bus)
         # Cap unbounded growth at startup (mirrors the session-store prune in
-        # sessions/init.py). 365d is deliberately generous â€” the user wants "all
-        # my chats"; voice sessions already prune at 30d and text is tiny â€” so
+        # sessions/init.py). 365d is deliberately generous — the user wants "all
+        # my chats"; voice sessions already prune at 30d and text is tiny — so
         # this only ever clears year-plus-old threads.
         chat_store.prune_older_than(365)
 
@@ -2416,18 +2416,18 @@ class DesktopApp:
                 from loguru import logger as _llog
 
                 _llog.info("Latency log JSONL writer attached: {}", log_path)
-        except Exception as exc:  # noqa: BLE001 â€” telemetry never breaks boot
+        except Exception as exc:  # noqa: BLE001 — telemetry never breaks boot
             from loguru import logger as _llog
 
             _llog.opt(exception=exc).warning(
-                "Latency log writer init failed â€” continuing without JSONL log.",
+                "Latency log writer init failed — continuing without JSONL log.",
             )
 
         # Frontier auto-switch (Phase F.3, 2026-04-29). This runs BEFORE
         # ``build_default_brain``, otherwise the brain would pick up the old
         # jarvis.toml and the switch would only take effect on the next
         # restart. ``apply_frontier_resolution`` patches the TOML on disk +
-        # mutates ``self.cfg`` â€” the brain build right after this then reads
+        # mutates ``self.cfg`` — the brain build right after this then reads
         # the frontier values. The resolver's STALE_MODELS filter prevents
         # downgrades when the API list contains stale IDs.
         try:
@@ -2451,11 +2451,11 @@ class DesktopApp:
                 )
             else:
                 _flog.info("Frontier autoswitch: TOML already frontier-compliant.")
-        except Exception as exc:  # noqa: BLE001 â€” a resolver failure must not stop boot.
+        except Exception as exc:  # noqa: BLE001 — a resolver failure must not stop boot.
             from loguru import logger as _flog
 
             _flog.opt(exception=exc).warning(
-                "Frontier autoswitch failed â€” keeping TOML defaults.",
+                "Frontier autoswitch failed — keeping TOML defaults.",
             )
 
         server.app.state.supervisor = supervisor
@@ -2472,7 +2472,7 @@ class DesktopApp:
         # default-app target their own desktop. Enable the native file actions.
         server.app.state.native_file_actions = True
 
-        # BrainManager on the same bus as the UI â€” but no longer on the
+        # BrainManager on the same bus as the UI — but no longer on the
         # visible startup path. The web server should serve /api/health
         # first; the first chat/drop interactions wait, bounded, on the
         # background build.
@@ -2497,14 +2497,14 @@ class DesktopApp:
                 from loguru import logger as _bootlog
 
                 _bootlog.warning(
-                    "MissionManager is missing jarvis_agent_status/-_cancel â€” status/"
+                    "MissionManager is missing jarvis_agent_status/-_cancel — status/"
                     "cancel voice patterns fall back to the normal spawn path."
                 )
             except Exception as exc:  # noqa: BLE001
                 from loguru import logger as _bootlog
 
                 _bootlog.opt(exception=exc).warning(
-                    "Wave-4 Y bootstrap failed â€” status/cancel handlers stay unwired."
+                    "Wave-4 Y bootstrap failed — status/cancel handlers stay unwired."
                 )
 
             try:
@@ -2551,7 +2551,7 @@ class DesktopApp:
 
                 brain_holder["error"] = f"{type(exc).__name__}: {exc}"
                 logger.opt(exception=exc).error(
-                    "BrainManager build failed â€” chat replies with a setup hint."
+                    "BrainManager build failed — chat replies with a setup hint."
                 )
             finally:
                 brain_ready.set()
@@ -2611,7 +2611,7 @@ class DesktopApp:
             # Realtime direct mode builds its tool bridge from these two
             # attributes at session construction; delegate through to the
             # real brain so a session opened after boot sees the full tool
-            # set (None during early boot â†’ bridge cleanly degrades).
+            # set (None during early boot → bridge cleanly degrades).
             @property
             def _tools(self) -> Any:
                 return getattr(brain_holder["brain"], "_tools", None)
@@ -2703,7 +2703,7 @@ class DesktopApp:
             Brain API: an ``async (text) -> str`` callable. We do the
             state transitions + store write explicitly here. When ``brain``
             is None (build failure), we return an honest setup message
-            â€” NOT a scripted mock reply.
+            — NOT a scripted mock reply.
             """
             if evt.role != "user":
                 return
@@ -2729,7 +2729,7 @@ class DesktopApp:
 
             # ------------------------------------------------------------------
             # Pre-brain hook (instruction-skill model, 2026-06-09 rebuild,
-            # AD-S4): a TriggerMatcher hit no longer macro-runs the skill â€”
+            # AD-S4): a TriggerMatcher hit no longer macro-runs the skill —
             # it is noted on the BrainManager, which injects the rendered
             # skill instructions into the upcoming brain turn. Uniform chat
             # output path, guaranteed invocation, no raw-Markdown replies.
@@ -2755,11 +2755,11 @@ class DesktopApp:
                         if callable(note):
                             note(matched.name, content=content, source="chat")
                             logger.info(
-                                "Skill trigger matched (chat): '{}' â€” handed to the brain turn",
+                                "Skill trigger matched (chat): '{}' — handed to the brain turn",
                                 matched.name,
                             )
             except Exception as exc:  # noqa: BLE001
-                # The pre-brain hook is defensive â€” a crash here must never
+                # The pre-brain hook is defensive — a crash here must never
                 # block the chat path. Fall through to the brain.
                 logger.opt(exception=exc).debug("Skill pre-hook (chat) skipped")
 
@@ -2793,7 +2793,7 @@ class DesktopApp:
 
             loop = asyncio.get_running_loop()
             # Instant acknowledgment (2026-08-17): the chat path has no
-            # streaming, so a heavy turn shows only "thinkingâ€¦" until the whole
+            # streaming, so a heavy turn shows only "thinking…" until the whole
             # reply returns. Show the same first-sign-of-life line the voice
             # engines speak as a muted pre-ack bubble; cancelled the moment the
             # reply is in (a fast turn shows nothing).
@@ -2810,7 +2810,7 @@ class DesktopApp:
                     brain=brain,
                     agent_brand=agent_brand(self.cfg),
                 )
-            except Exception:  # noqa: BLE001 â€” a missing ack must never block chat
+            except Exception:  # noqa: BLE001 — a missing ack must never block chat
                 logger.opt(exception=True).debug("chat instant ack not armed")
             # Word-by-word preview of the reply for the chat column: the
             # brain's text_consumer feeds a coalescing publisher, the UI
@@ -2828,12 +2828,12 @@ class DesktopApp:
                 await supervisor.set_state("THINKING")
                 generate = getattr(brain, "generate", None)
                 # Both brain shapes run as an X-abortable task so the bar's X
-                # (request_hangup â†’ cancel_active_chat_turn) stops a chat turn
+                # (request_hangup → cancel_active_chat_turn) stops a chat turn
                 # too, not just a voice turn (bug 2026-06-19: the X was ignored
                 # on the chat path).
                 if callable(generate):
                     # source_layer lets the router exempt a drag-dropped mission
-                    # recap (ui.web.ws.mission_inject) from force-spawn â€” a recap
+                    # recap (ui.web.ws.mission_inject) from force-spawn — a recap
                     # is discussed inline, never re-dispatched (doom-loop fix
                     # 2026-06-16). Other callers default to None (normal routing).
                     # allow_voice_confirm=True is load-bearing here (audit
@@ -2842,7 +2842,7 @@ class DesktopApp:
                     # an ask-tier tool (send this mail, run this command) went
                     # to the executor with no channel at all and came back
                     # refused. With it, chat gets the same two-turn flow voice
-                    # has â€” the turn ENDS with the confirmation question as its
+                    # has — the turn ENDS with the confirmation question as its
                     # reply, and the user's next message ("ja"/"nein") resolves
                     # it. The phrasing layer is channel-agnostic by design
                     # (dodaios/voice/tool_confirmation.py); nothing here speaks.
@@ -2897,9 +2897,9 @@ class DesktopApp:
             if ack_task is not None and not ack_task.done():
                 ack_task.cancel()
             if reply is _CHAT_TURN_ABORTED:
-                # The user pressed the bar's X mid-think â€” honour it and drop
+                # The user pressed the bar's X mid-think — honour it and drop
                 # back to IDLE instead of speaking a half-finished turn.
-                logger.info("Chat turn aborted by the bar's X â€” back to IDLE.")
+                logger.info("Chat turn aborted by the bar's X — back to IDLE.")
                 delta_publisher.cancel()
                 await supervisor.set_state("IDLE")
                 return
@@ -2936,7 +2936,7 @@ class DesktopApp:
                 dragged = (text or "").strip() or None
                 if not items and dragged is None:
                     # A drop the user definitely made, carrying nothing we can
-                    # use (an empty folder, an unreadable path). Say so â€” this
+                    # use (an empty folder, an unreadable path). Say so — this
                     # is precisely the case where silence leaves them guessing
                     # whether the bar even noticed.
                     report_drop_result(False)
@@ -2971,12 +2971,12 @@ class DesktopApp:
                 )
             else:
                 _dlog.opt(exception=exc).debug("overlay drop handler wiring skipped")
-        except Exception as exc:  # noqa: BLE001 â€” drop wiring must never block boot.
+        except Exception as exc:  # noqa: BLE001 — drop wiring must never block boot.
             from loguru import logger as _dlog
 
             _dlog.opt(exception=exc).debug("overlay drop handler wiring skipped")
 
-        # Overlay right-click (bar OR mascot) â†’ raise the main desktop window.
+        # Overlay right-click (bar OR mascot) → raise the main desktop window.
         # OrbBusBridge publishes ShowWindowRequested from the Tk thread; the
         # handler runs on the asyncio loop and immediately thread-hops, because
         # pywebview calls block their calling thread (see _on_show_window_requested).
@@ -3000,7 +3000,7 @@ class DesktopApp:
         server.bus.subscribe(ComposeRequested, self._on_show_window_requested)
         self._install_focus_route(server)
 
-        # Workflow system (Phase 6) â€” store + runner + scheduler. Its own
+        # Workflow system (Phase 6) — store + runner + scheduler. Its own
         # DB file (``workflows.sqlite``) next to the memory DB, so schema
         # migrations here can happen independently. Failure is not fatal:
         # the workflows view just stays empty (503 on API calls).
@@ -3023,13 +3023,13 @@ class DesktopApp:
             # with attach_harness_manager/attach_tools defined and NEVER
             # called, so every harness_dispatch step died on "No
             # HarnessManager available" and every tool_call on "Tool
-            # registry/executor not available" â€” a scheduled workflow could
+            # registry/executor not available" — a scheduled workflow could
             # not touch the desktop or call a single tool. Same defect the
             # TaskRunner had (deep-dive H-02, server.py:3224), fixed the same
             # way. Both attachments are references, not work: the
             # HarnessManager ctor only zeroes four fields (entry-point scan
             # is lazy, on first dispatch), and BrainToolSurface resolves the
-            # brain per lookup â€” so the boot critical path stays untouched.
+            # brain per lookup — so the boot critical path stays untouched.
             # A live surface rather than brain._tools, because
             # BrainManager.refresh_tools() swaps that dict out on every
             # CLI/MCP connect.
@@ -3040,11 +3040,11 @@ class DesktopApp:
                 workflow_runner.attach_harness_manager(HarnessManager(bus=server.bus))
                 tool_surface = BrainToolSurface(lambda: getattr(server.app.state, "brain", None))
                 workflow_runner.attach_tools(tool_surface, tool_surface)
-            except Exception as exc:  # noqa: BLE001 â€” degrade, don't kill workflows.
+            except Exception as exc:  # noqa: BLE001 — degrade, don't kill workflows.
                 from loguru import logger as _wf_logger
 
                 _wf_logger.opt(exception=exc).warning(
-                    "Workflow runner has no harness/tools â€” harness_dispatch "
+                    "Workflow runner has no harness/tools — harness_dispatch "
                     "and tool_call steps will fail; the rest still runs."
                 )
             workflow_scheduler = WorkflowScheduler(
@@ -3061,7 +3061,7 @@ class DesktopApp:
             from loguru import logger
 
             logger.opt(exception=exc).warning(
-                "Workflow system could not start â€” the workflows view stays empty."
+                "Workflow system could not start — the workflows view stays empty."
             )
             server.app.state.workflow_store = None
             server.app.state.workflow_runner = None
@@ -3081,7 +3081,7 @@ class DesktopApp:
 
         runtime_refs.set_mcp_registry(mcp_registry)
 
-        # tool_registry is a plain dict â€” MCPToolAdapters and native tools are
+        # tool_registry is a plain dict — MCPToolAdapters and native tools are
         # merged here. BrainManager refreshes its tool set on BrainToolsChanged.
         tool_registry: dict[str, Any] = {}
         server.app.state.tool_registry = tool_registry
@@ -3141,7 +3141,7 @@ class DesktopApp:
                         "BrainToolsChanged publish failed after MCP autostart",
                     )
 
-        # Conductor (an OSS tool in the same monorepo) â€” its own store +
+        # Conductor (an OSS tool in the same monorepo) — its own store +
         # runner + scheduler, port-less, only shares the Jarvis event loop
         # and Jarvis's FastAPI server as its embed host.
         try:
@@ -3172,7 +3172,7 @@ class DesktopApp:
             from loguru import logger
 
             logger.opt(exception=exc).warning(
-                "Conductor setup failed â€” the Conductor view stays empty."
+                "Conductor setup failed — the Conductor view stays empty."
             )
             server.app.state.conductor_store = None
             server.app.state.conductor_runner = None
@@ -3204,7 +3204,7 @@ class DesktopApp:
         async def _bootstrap_workflows() -> None:
             """Store init + seed workflows + scheduler start.
 
-            Fire-and-forget from the backend loop â€” errors are logged but
+            Fire-and-forget from the backend loop — errors are logged but
             not propagated, so the rest of the app still boots. Without a
             brain callable, the scheduler still runs (only brain_prompt
             steps would fail during a run).
@@ -3223,7 +3223,7 @@ class DesktopApp:
                 added = await ensure_seed_workflows(store)
                 _logger.info("Workflow store ready ({} new seed workflow(s)).", added)
                 # Harness manager + tool surface are attached above, at runner
-                # construction â€” ``tool_call`` and ``harness_dispatch`` steps
+                # construction — ``tool_call`` and ``harness_dispatch`` steps
                 # run through the brain's own risk-tier-aware ToolExecutor.
                 if scheduler is not None:
                     scheduler.start()
@@ -3243,8 +3243,8 @@ class DesktopApp:
             # starts. It is moved into ``_heavy_backend_bg`` below so it runs
             # BEHIND the live Jarvis-Bar / wake listener. ``_start_speech_and_orb``
             # needs only ``server.bus`` + ``server.app.state`` (skill_registry,
-            # set in the WebServer ctor â€” already done above) + ``supervisor`` +
-            # the deferred brain proxy â€” NONE of that chain. The user-perceived
+            # set in the WebServer ctor — already done above) + ``supervisor`` +
+            # the deferred brain proxy — NONE of that chain. The user-perceived
             # "ready to talk to Jarvis" gate is the wake listener, not the full
             # backend, so it must not wait ~15-20 s for subsystems it never uses.
             def _log_speech_and_orb_done(task: asyncio.Task) -> None:
@@ -3261,7 +3261,7 @@ class DesktopApp:
             # Wake-model GIL-priority gate: set by ``_start_speech_and_orb`` once
             # the (light base/cpu) wake model has finished loading. The heavy
             # backend (the GIL-heavy brain + MCP build) waits on this so the wake
-            # model load is NOT starved by the import storm â€” it loads in ~3 s
+            # model load is NOT starved by the import storm — it loads in ~3 s
             # isolated instead of ~8.8 s racing brain/mcp. Matches the user's
             # "window -> Jarvis-Bar -> rest" order.
             self._wake_model_loaded = asyncio.Event()
@@ -3285,7 +3285,7 @@ class DesktopApp:
             # Deliberately NOT inside ``_heavy_backend_bg``: that task waits on
             # the wake-model gate AND the whole ``server.start()`` chain before
             # it schedules anything, so the warm could not begin until roughly
-            # 30-40 s after launch â€” while the wake word is armed within ~1 s.
+            # 30-40 s after launch — while the wake word is armed within ~1 s.
             # A user who spoke in that window paid the provider's full cold
             # start (documented 15-25 s for the ChatGPT-subscription transport)
             # inside their own call, with the bar already claiming to listen.
@@ -3293,7 +3293,7 @@ class DesktopApp:
             # AP-26 is preserved by construction: the worker below does nothing
             # until VoiceBootStatus reports ``voice_usable``, i.e. AFTER the
             # mark ``check_boot_budget.py`` measures, and nothing on the boot
-            # path ever awaits it â€” so neither VOICE_USABLE nor APP_INTERACTIVE
+            # path ever awaits it — so neither VOICE_USABLE nor APP_INTERACTIVE
             # can move because of it.
             loop.create_task(
                 self._run_realtime_transport_warm(server.bus),
@@ -3303,7 +3303,7 @@ class DesktopApp:
             # === 2) Everything else, BEHIND the live wake listener ==========
             # The heavy backend keeps its original internal order (server.start()
             # before brain/mcp/workflows/conductor) so no task that depended on a
-            # fully-initialised app.state regresses â€” only the wake path was
+            # fully-initialised app.state regresses — only the wake path was
             # pulled ahead of it. set_app + _write_meta gate API delegation
             # (serve-first), which Voice does not need.
             async def _heavy_backend_bg() -> None:
@@ -3311,7 +3311,7 @@ class DesktopApp:
                 # (server.start's mission/wiki/session/channel init + git-prune,
                 # then the brain + MCP build) until the wake model has loaded.
                 # Measured: the light base/cpu wake model loads ~4 s isolated but
-                # ~8 s when it races this boot storm for CPU/disk â€” gating the
+                # ~8 s when it races this boot storm for CPU/disk — gating the
                 # whole storm behind wake roughly halves the custom-wake hear-
                 # ready time. This matches the user's explicit "window ->
                 # Jarvis-Bar -> rest" order: the bootstrap already serves the
@@ -3324,7 +3324,7 @@ class DesktopApp:
                     from loguru import logger as _slog
 
                     _slog.info(
-                        "Heavy backend: wake-model gate timed out (12 s) â€” "
+                        "Heavy backend: wake-model gate timed out (12 s) — "
                         "starting the backend anyway."
                     )
                 if self._shutdown_done:
@@ -3340,8 +3340,8 @@ class DesktopApp:
                 # chain runs. Every route whose subsystem is still warming
                 # answers its documented 503/None placeholder (the WebServer
                 # ctor sets those up for exactly this contract), so the UI
-                # becomes INTERACTIVE â€” chat history (app.state.chat_store is
-                # set before this task), settings, WS â€” within seconds instead
+                # becomes INTERACTIVE — chat history (app.state.chat_store is
+                # set before this task), settings, WS — within seconds instead
                 # of every data request being HELD behind ~8-15 s of
                 # mission/wiki/session/channel init. TTI forensic 2026-07-02:
                 # the window served at 1.2 s but set_app happened at +16 s,
@@ -3349,7 +3349,7 @@ class DesktopApp:
                 # BEFORE the UI can reach the API: the grid restores and
                 # attaches panes the moment it can, and each of them must
                 # re-join the agent the PTY host kept running instead of
-                # starting it again in this process (RUB-102). A bare flag â€”
+                # starting it again in this process (RUB-102). A bare flag —
                 # the registry and the reattach pass come after server.start.
                 from dodaios.agentic_ide import host_mode
 
@@ -3358,7 +3358,7 @@ class DesktopApp:
                 _db_mark("app_interactive")
                 if _bp:
                     # Honest end-to-end anchor: the UI's data requests are now
-                    # answered â€” spawn -> app usable, same clock as BOOT_READY.
+                    # answered — spawn -> app usable, same clock as BOOT_READY.
                     print(
                         f"APP_INTERACTIVE_MS={(time.perf_counter() - _bp_t0) * 1000.0:.1f}",
                         flush=True,
@@ -3380,12 +3380,12 @@ class DesktopApp:
                     from dodaios.ui.web.agent_chat_routes import schedule_turn_reattach
 
                     schedule_turn_reattach(server.app.state)
-                except Exception as exc:  # noqa: BLE001 â€” never kill the backend loop
+                except Exception as exc:  # noqa: BLE001 — never kill the backend loop
                     from loguru import logger as _slog
 
                     _slog.opt(exception=exc).error("Heavy backend init (server.start) failed.")
                 loop.create_task(_build_brain_bg(), name="brain-build")
-                # MCP autostart as a fire-and-forget task â€” doesn't block backend-ready.
+                # MCP autostart as a fire-and-forget task — doesn't block backend-ready.
                 loop.create_task(_start_enabled_mcps())
                 loop.create_task(_bootstrap_workflows(), name="workflow-bootstrap")
                 loop.create_task(_bootstrap_conductor(), name="conductor-bootstrap")
@@ -3394,7 +3394,7 @@ class DesktopApp:
                 # path (AP-26). Runs behind the live wake listener (this whole
                 # function already waited on ``self._wake_model_loaded`` above), so
                 # a fresh install that skipped/failed the installer prefetch still
-                # self-heals without editing jarvis.toml. Never fatal â€” the wake
+                # self-heals without editing jarvis.toml. Never fatal — the wake
                 # word degrades honestly until the model lands.
                 async def _provision_wake_model() -> None:
                     try:
@@ -3410,7 +3410,7 @@ class DesktopApp:
                             return
                         # The matching-language model just landed. Re-resolve the
                         # wake plan and live-switch the running detector to
-                        # vosk_kws so the user's word works immediately â€” no
+                        # vosk_kws so the user's word works immediately — no
                         # restart (mirrors the settings PUT live-apply). A
                         # headless/absent pipeline just means it applies on the
                         # next voice start.
@@ -3437,7 +3437,7 @@ class DesktopApp:
                                     "live-switched detector to vosk_kws.",
                                     lang,
                                 )
-                    except Exception:  # noqa: BLE001 â€” a background probe never crashes boot
+                    except Exception:  # noqa: BLE001 — a background probe never crashes boot
                         from loguru import logger as _wmf_log
 
                         _wmf_log.opt(exception=True).debug("Off-boot wake-model provision skipped.")
@@ -3450,14 +3450,14 @@ class DesktopApp:
             self._heavy_backend_task.add_done_callback(_log_speech_and_orb_done)
             loop.call_soon(self._start_virtual_cursor)
             # Watch this loop from OFF it, for the rest of the process's life.
-            # Everything the user touches â€” every WebSocket frame, every route,
-            # every brain turn â€” is serialized through the loop below, so one
+            # Everything the user touches — every WebSocket frame, every route,
+            # every brain turn — is serialized through the loop below, so one
             # synchronous call on it stops all of them at once. That failure
             # reaches the user as "Not responding" in the title bar and as
             # keystrokes arriving seconds late in an Agentic-IDE pane, and it
             # cannot be diagnosed from the inside: the diagnostics route that
             # measures loop lag runs ON the loop and answers nothing while it
-            # is wedged (2026-07-28 â€” ten minutes of silence, health included,
+            # is wedged (2026-07-28 — ten minutes of silence, health included,
             # and a sampling profiler attached to the live process was the only
             # way to learn it was a TOML parse). Costs one sleeping thread.
             self._start_loop_watchdog(loop)
@@ -3470,14 +3470,14 @@ class DesktopApp:
             self._start_socket_budget_watchdog()
             self._backend_serving_since = time.monotonic()
             # run_forever() has exactly one legitimate way out: shutdown()
-            # calling loop.stop(). Every OTHER way out â€” a BaseException from
-            # a callback, a stop nobody asked for â€” takes the whole backend
+            # calling loop.stop(). Every OTHER way out — a BaseException from
+            # a callback, a stop nobody asked for — takes the whole backend
             # with it and leaves the window standing in front of a dead
             # process. Naming which of the two happened is the difference
             # between a diagnosable incident and a grey OFFLINE dot.
             try:
                 loop.run_forever()
-            except BaseException as exc:  # noqa: BLE001 â€” re-raising here
+            except BaseException as exc:  # noqa: BLE001 — re-raising here
                 # would only reach the excepthook; we want it in the log WITH
                 # the recovery decision that follows, then a clean unwind.
                 from loguru import logger as _crash_log
@@ -3512,14 +3512,14 @@ class DesktopApp:
     # ---- Event-loop watchdog -------------------------------------------------
 
     def _start_loop_watchdog(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Arm the off-loop stall reporter. Never fatal â€” it is a diagnostic."""
+        """Arm the off-loop stall reporter. Never fatal — it is a diagnostic."""
         try:
             from dodaios.core.loop_watchdog import EventLoopWatchdog
 
             watchdog = EventLoopWatchdog(loop)
             watchdog.start()
             self._loop_watchdog = watchdog
-        except Exception:  # noqa: BLE001 â€” a watchdog must never break boot
+        except Exception:  # noqa: BLE001 — a watchdog must never break boot
             from loguru import logger as _wd_log
 
             _wd_log.opt(exception=True).debug("Event-loop watchdog not armed.")
@@ -3532,13 +3532,13 @@ class DesktopApp:
         self._loop_watchdog = None
         try:
             watchdog.stop()
-        except Exception:  # noqa: BLE001, S110 â€” teardown of a diagnostic
+        except Exception:  # noqa: BLE001, S110 — teardown of a diagnostic
             pass
 
     # ---- Socket-budget watchdog ---------------------------------------------
 
     def _start_socket_budget_watchdog(self) -> None:
-        """Arm the ephemeral-port watchdog. Never fatal â€” it is a diagnostic."""
+        """Arm the ephemeral-port watchdog. Never fatal — it is a diagnostic."""
         from dodaios.core.socket_budget import start_default_watchdog
 
         start_default_watchdog()
@@ -3559,7 +3559,7 @@ class DesktopApp:
         * The user quit or restarted. ``shutdown()`` set the flag, the window
           is on its way out, and there is nothing to report.
         * Nobody asked. The loop is gone but the GUI thread keeps the window
-          on screen, so the app is still *there* â€” it just cannot serve a
+          on screen, so the app is still *there* — it just cannot serve a
           single request. Every live surface goes dark at once and the only
           thing the user is told is a grey OFFLINE dot in the sidebar, with no
           reason and no way back short of killing the app by hand. That is the
@@ -3568,7 +3568,7 @@ class DesktopApp:
 
         For the second case: log it as the incident it is, then use the same
         relauncher the in-app Restart button uses to bring the process back.
-        Two guards keep that from becoming a loop â€” it fires at most once per
+        Two guards keep that from becoming a loop — it fires at most once per
         process, and only for a backend that had genuinely been serving. A
         backend that dies during boot therefore fails visibly and stays
         failed, which is the honest outcome: restarting it would just crash
@@ -3620,17 +3620,17 @@ class DesktopApp:
         if not window_up:
             # Headless, or the window is already down: the process is ending
             # anyway and a relaunch would fight the exit path.
-            logger.info("No window left to rescue â€” letting the process end.")
+            logger.info("No window left to rescue — letting the process end.")
             return
         if getattr(self, "_auto_recovery_used", False):
             logger.error(
-                "Automatic recovery was already used this process â€” not "
+                "Automatic recovery was already used this process — not "
                 "restarting again. Please restart the app."
             )
             return
         if served_s < _BACKEND_MIN_UPTIME_FOR_RECOVERY_S:
             logger.error(
-                "Backend survived only {:.0f}s (< {:.0f}s) â€” treating this as "
+                "Backend survived only {:.0f}s (< {:.0f}s) — treating this as "
                 "a boot failure and NOT restarting, so a broken build cannot "
                 "relaunch itself forever.",
                 served_s,
@@ -3643,7 +3643,7 @@ class DesktopApp:
             drop_elevation=False, reason="backend_recovery"
         )
         if scheduled:
-            logger.warning("Backend died â€” restarting the app automatically.")
+            logger.warning("Backend died — restarting the app automatically.")
         else:
             logger.error(
                 "Backend died and the automatic restart could not be "
@@ -3655,11 +3655,11 @@ class DesktopApp:
         """Arm the Jarvis cursor identity and (optionally) the click-pulse overlay.
 
         Two independent layers:
-          1. **System-cursor swap** â€” replaces the OS arrow with the black-yellow
+          1. **System-cursor swap** — replaces the OS arrow with the black-yellow
              Jarvis cursor while Computer-Use acts. Safe (no window, no DWM
-             compositing), runs unconditionally on Windows â€” this is the visible-
+             compositing), runs unconditionally on Windows — this is the visible-
              identity effect the user explicitly asked for.
-          2. **Tk halo / click-pulse overlay** â€” additive visual feedback,
+          2. **Tk halo / click-pulse overlay** — additive visual feedback,
              default OFF since BUG-030 (LWA black-screen). Only starts when
              ``[computer_use].show_virtual_cursor`` is true.
 
@@ -3668,7 +3668,7 @@ class DesktopApp:
         from loguru import logger
 
         if os.environ.get("JARVIS_DEPTH", "").strip() not in ("", "0"):
-            return  # sub-agent process â€” no cursor / overlay
+            return  # sub-agent process — no cursor / overlay
 
         cu = getattr(self.cfg, "computer_use", None)
 
@@ -3686,7 +3686,7 @@ class DesktopApp:
         except Exception as exc:  # noqa: BLE001
             logger.opt(exception=exc).debug("set_glide_ms failed")
 
-        # 1. Jarvis SYSTEM cursor â€” always on (best-effort). This is what makes
+        # 1. Jarvis SYSTEM cursor — always on (best-effort). This is what makes
         # the cursor visibly "Jarvis" during a Computer-Use mission. The
         # ``session_bracket`` around ``run_cu_loop`` calls ``.ping()`` /
         # ``.shutdown()`` on the installed singleton; without one installed
@@ -3714,7 +3714,7 @@ class DesktopApp:
             logger.opt(exception=exc).warning("Dodaios system cursor not startable")
             self._jarvis_cursor = None
 
-        # 2. Tk halo / click-pulse overlay â€” opt-in (BUG-030 default off).
+        # 2. Tk halo / click-pulse overlay — opt-in (BUG-030 default off).
         if cu is None or not getattr(cu, "show_virtual_cursor", False):
             return
         try:
@@ -3725,7 +3725,7 @@ class DesktopApp:
                 self._virtual_cursor = cursor
                 logger.info("Virtual mouse overlay active (halo + click pulse).")
             else:
-                logger.info("Virtual mouse overlay unavailable (headless) â€” no-op.")
+                logger.info("Virtual mouse overlay unavailable (headless) — no-op.")
         except Exception as exc:  # noqa: BLE001
             logger.opt(exception=exc).warning("Virtual mouse overlay not startable")
             self._virtual_cursor = None
@@ -3747,7 +3747,7 @@ class DesktopApp:
         if sys.platform == "darwin":
             # This runs on the jarvis-backend worker thread; Aqua-Tk (like
             # AppKit) is main-thread-only on macOS, so an in-process bar or
-            # mascot Tk root here aborts the WHOLE process natively â€” the
+            # mascot Tk root here aborts the WHOLE process natively — the
             # second macOS first-boot crash (BUG-057; the first was the
             # BUG-056 tray). Both surfaces therefore live in their own
             # companion process whose MAIN thread owns the Tk mainloop
@@ -3830,7 +3830,7 @@ class DesktopApp:
             # The host imports its renderer before it reports ready; give a
             # cold interpreter more room than the 3 s default.
             surface.start_in_thread(timeout=10.0)
-        except Exception:  # noqa: BLE001 â€” cosmetic; the caller degrades
+        except Exception:  # noqa: BLE001 — cosmetic; the caller degrades
             logger.opt(exception=True).warning("Overlay host for style={} failed to start.", style)
             return None
         if getattr(surface, "_proc", None) is None:
@@ -3878,7 +3878,7 @@ class DesktopApp:
             return False
         try:
             fn(*args)
-        except Exception as exc:  # noqa: BLE001 â€” cosmetic; the setting is stored
+        except Exception as exc:  # noqa: BLE001 — cosmetic; the setting is stored
             logger.opt(exception=exc).warning("pet surface call {} failed", method)
             return False
         return True
@@ -3888,7 +3888,7 @@ class DesktopApp:
 
         Updates ``[ui] pet_id`` in memory (the route persists it) and swaps the
         figure on the running orb window. ``applied_live`` is False when there
-        is no orb window to swap it on â€” the choice then applies at the next
+        is no orb window to swap it on — the choice then applies at the next
         start or the next switch to the pet style.
         """
         from loguru import logger
@@ -3947,7 +3947,7 @@ class DesktopApp:
 
         Flips the bar's ``_persistent`` flag + the bridge's ``_hide_on_idle``,
         then shows the idle pill (enabled) or hides it when currently idle
-        (disabled). Only flag flips â€” no new Tk root â€” so it is safe + immediate.
+        (disabled). Only flag flips — no new Tk root — so it is safe + immediate.
         """
         from loguru import logger
 
@@ -3956,7 +3956,7 @@ class DesktopApp:
             self.cfg.ui.bar_persistent = enabled
         except Exception as exc:  # noqa: BLE001
             # The live flip below still happens, so the bar visibly changes and
-            # this call still reports ok â€” but the value never reached the
+            # this call still reports ok — but the value never reached the
             # config, so it is gone at the next start. That reads as "the
             # setting does not stick", which is unfindable without this line.
             logger.warning("bar_persistent not stored in config: {}", exc)
@@ -3984,7 +3984,7 @@ class DesktopApp:
 
         Clamps the value, updates the in-memory config, and calls the surface's
         ``set_size_scale`` so the bar grows/shrinks immediately (proportionally,
-        shape preserved). Only the bar surface implements it â€” on the mascot /
+        shape preserved). Only the bar surface implements it — on the mascot /
         no-overlay style this reports ``applied_live=False`` (persisted only).
         """
         from loguru import logger
@@ -4015,7 +4015,7 @@ class DesktopApp:
 
         Updates the in-memory config and calls the surface's ``set_follow_cursor``
         so the running bar starts/stops following the cursor across monitors
-        immediately. Only the bar surface implements it â€” on the mascot /
+        immediately. Only the bar surface implements it — on the mascot /
         no-overlay style this reports ``applied_live=False`` (persisted only).
         """
         from loguru import logger
@@ -4047,16 +4047,16 @@ class DesktopApp:
         aborts the whole app with ``Tcl_AsyncDelete: async handler deleted by
         the wrong thread`` (BUG-031). The transitions therefore are:
 
-        - ``"none"``              â†’ the rootless ``NullOverlay``.
-        - one orb look to another â†’ re-style the live orb window (same root).
-        - an already-built style  â†’ show it again (same root, never destroyed).
-        - anything else           â†’ start the surface in its own host process
+        - ``"none"``              → the rootless ``NullOverlay``.
+        - one orb look to another → re-style the live orb window (same root).
+        - an already-built style  → show it again (same root, never destroyed).
+        - anything else           → start the surface in its own host process
                                     (``_build_hosted_surface``), whose root
                                     lives on that process's main thread.
 
         The surface being left is taken off the screen at once, so the old look
         never lingers beside the new one (the 2026-10-06 "the pet stays next to
-        the bar" report). A hosted surface is stopped â€” its process ends â€” and
+        the bar" report). A hosted surface is stopped — its process ends — and
         an in-process one is only hidden, never destroyed. ``applied_live`` is
         False only when a host fails to start; the route then reports
         ``restart_required`` and the frontend offers a one-click restart.
@@ -4074,7 +4074,7 @@ class DesktopApp:
             return {"ok": False, "applied_live": False, "style": style}
         bridge = getattr(self, "_bridge", None)
         if bridge is None:
-            # No live bridge (headless / overlay unavailable) â€” persisted only.
+            # No live bridge (headless / overlay unavailable) — persisted only.
             return {"ok": True, "applied_live": False, "style": style}
         # What is on screen right now. Not cfg.ui.orb_style: the settings route
         # stores the NEW style there before it calls this method.
@@ -4156,7 +4156,7 @@ class DesktopApp:
         self._live_overlay_style = style
         try:
             self.cfg.ui.orb_style = style  # best-effort in-memory
-        except Exception:  # noqa: BLE001 â€” a frozen model is not an error
+        except Exception:  # noqa: BLE001 — a frozen model is not an error
             from loguru import logger
 
             logger.debug("in-memory orb_style update skipped", exc_info=True)
@@ -4180,23 +4180,23 @@ class DesktopApp:
                 surface.stop()
             else:
                 surface.hide()
-        except Exception:  # noqa: BLE001 â€” cosmetic; the new surface is already live
+        except Exception:  # noqa: BLE001 — cosmetic; the new surface is already live
             logger.debug("retiring the previous overlay failed", exc_info=True)
 
     def request_restart(self) -> bool:
         """Cleanly self-restart the app to deliver a pending overlay change.
 
-        An overlay style that needs a brand-new Tk root (e.g. bar â†’ mascot)
-        cannot be applied live (BUG-031 â€” ``Tcl_AsyncDelete`` cross-thread
+        An overlay style that needs a brand-new Tk root (e.g. bar → mascot)
+        cannot be applied live (BUG-031 — ``Tcl_AsyncDelete`` cross-thread
         abort). Instead of asking the user to close + reopen by hand, this
         spawns a detached relauncher (``dodaios.ui.relauncher``) that waits for
-        THIS process to exit â€” releasing the single-instance mutex â€” and then
+        THIS process to exit — releasing the single-instance mutex — and then
         starts a fresh launcher, and triggers a clean quit 0.8 s later (the same
         path as the tray "Quit": ``_user_requested_quit`` + ``window.destroy``).
         The short delay lets the HTTP 200 flush to the frontend first.
 
         Returns ``True`` if a restart was scheduled, ``False`` on a headless host
-        (no window to restart). Fully guarded â€” a spawn failure leaves the app
+        (no window to restart). Fully guarded — a spawn failure leaves the app
         running rather than half-quitting.
         """
         return self._schedule_restart(drop_elevation=False, reason="desktop_request")[0]
@@ -4222,12 +4222,12 @@ class DesktopApp:
     def _schedule_restart(
         self, *, drop_elevation: bool, reason: str = "unspecified"
     ) -> tuple[bool, str]:
-        """Spawn the detached relauncher, then quit â€” optionally dropping
+        """Spawn the detached relauncher, then quit — optionally dropping
         elevation on the way out.
 
         ``drop_elevation`` launches the relauncher through the elevated token's
-        filtered companion token, so the whole restart chain (relauncher â†’ fresh
-        launcher â†’ window) lands at ordinary integrity. Any failure returns
+        filtered companion token, so the whole restart chain (relauncher → fresh
+        launcher → window) lands at ordinary integrity. Any failure returns
         ``(False, detail)`` WITHOUT scheduling the quit.
         """
         from loguru import logger
@@ -4267,7 +4267,7 @@ class DesktopApp:
                 )
                 if not outcome.ok:
                     logger.warning(
-                        "Unelevated relaunch refused â€” staying up elevated: {}",
+                        "Unelevated relaunch refused — staying up elevated: {}",
                         outcome.detail,
                     )
                     return (False, outcome.detail)
@@ -4276,9 +4276,9 @@ class DesktopApp:
                 # stdio: without both, the helper dies with this process or
                 # crashes on its first log line, and Restart only shuts down.
                 spawn_detached(argv, cwd=repo_root, env=fresh_user_env())
-        except Exception as exc:  # noqa: BLE001 â€” never half-quit on a spawn error
+        except Exception as exc:  # noqa: BLE001 — never half-quit on a spawn error
             logger.opt(exception=exc).warning(
-                "relauncher spawn failed â€” staying up (no self-restart)"
+                "relauncher spawn failed — staying up (no self-restart)"
             )
             return (False, f"{type(exc).__name__}: {exc}")
 
@@ -4287,12 +4287,12 @@ class DesktopApp:
             self._user_requested_quit = True
 
         def _quit_soon() -> None:
-            # Clean quit, but HARD-EXIT if shutdown stalls â€” guarantees the
+            # Clean quit, but HARD-EXIT if shutdown stalls — guarantees the
             # single-instance mutex + port free up so the relauncher's fresh
             # instance can claim them (without it, a lingering windowless
-            # process holds the lock and the new instance bounces off it â†’
+            # process holds the lock and the new instance bounces off it →
             # "shuts down but never comes back"). Destroys detached windows
-            # too â€” webview.start() returns only when the LAST window closes.
+            # too — webview.start() returns only when the LAST window closes.
             run_restart_quit_sequence(
                 set_quit=_mark_quit,
                 destroy_window=self._destroy_all_windows,
@@ -4310,8 +4310,8 @@ class DesktopApp:
     def request_quit(self) -> bool:
         """Cleanly quit the app WITHOUT relaunching (Terms declined).
 
-        Same quit sequence as ``request_restart`` â€” mark the quit, destroy the
-        window, hard-exit if shutdown stalls â€” but no relauncher is spawned,
+        Same quit sequence as ``request_restart`` — mark the quit, destroy the
+        window, hard-exit if shutdown stalls — but no relauncher is spawned,
         so the process simply ends. Used by the onboarding Terms gate
         (design 2026-07-09): declining the Terms must not leave a half-running
         assistant behind. Returns ``True`` if the quit was scheduled,
@@ -4358,7 +4358,7 @@ class DesktopApp:
 
         Never fatal and never silent: a failed warm only means the next call
         pays what it pays today, and it says so (AP-30). Cross-platform by
-        construction â€” the work is a bus subscription plus whatever the
+        construction — the work is a bus subscription plus whatever the
         provider's own capability probe does, and a host with no eligible
         provider simply warms nothing.
         """
@@ -4391,7 +4391,7 @@ class DesktopApp:
         try:
             bus.subscribe(VoiceBootStatus, _on_voice_boot_status)
             bus.subscribe(VoiceSessionEnded, _on_voice_session_ended)
-        except Exception:  # noqa: BLE001 â€” a headless/bare bus keeps the warm
+        except Exception:  # noqa: BLE001 — a headless/bare bus keeps the warm
             _warm_log_exc.warning(
                 "Realtime transport warm could not subscribe to the voice "
                 "lifecycle; it will warm once and not re-arm after calls."
@@ -4400,7 +4400,7 @@ class DesktopApp:
         # Spawn-only prestart BEFORE the gates below. The managed local
         # server's models load 45-90 s in a SEPARATE process, so parking its
         # spawn behind the voice gate (+ delay) pushed local-voice readiness
-        # past the two-minute mark on every boot for nothing â€” the gate
+        # past the two-minute mark on every boot for nothing — the gate
         # exists to keep the ChatGPT app-server spawn and account round trip
         # out of the boot's CPU/disk window, and a prespawn is neither. The
         # full warm (readiness, brain residency) stays behind the gates
@@ -4414,7 +4414,7 @@ class DesktopApp:
             await realtime_prespawn_transports(prespawn_cfg)
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 â€” prespawning is advisory, never fatal
+        except Exception:  # noqa: BLE001 — prespawning is advisory, never fatal
             _warm_log_exc.warning(
                 "Realtime transport prespawn failed; the local server starts "
                 "with the regular transport warm instead."
@@ -4455,7 +4455,7 @@ class DesktopApp:
                 await realtime_warm_selected_transports(cfg)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 â€” warming is advisory, never fatal
+            except Exception:  # noqa: BLE001 — warming is advisory, never fatal
                 _warm_log_exc.warning(
                     "Realtime transport warm failed; the next call pays the provider's cold start."
                 )
@@ -4472,14 +4472,14 @@ class DesktopApp:
         """Starts the orb overlay (Tk daemon thread) + speech pipeline (a loop task).
 
         Failure is not fatal: a missing mic, no API keys, blocked audio
-        devices â€” the desktop app keeps running without voice. Can be
+        devices — the desktop app keeps running without voice. Can be
         disabled via ENV ``JARVIS_VOICE=0``.
 
         Architecture matches ``dodaios.speech.watchdog``: same ``bus`` +
         ``supervisor``, so ``SystemStateChanged`` gets received by the orb.
 
         ``brain`` is the shared BrainManager instance (or MockBrain fallback)
-        from ``_run_backend`` â€” text chat and voice share history and
+        from ``_run_backend`` — text chat and voice share history and
         provider state.
         """
         if os.environ.get("JARVIS_VOICE", "").strip().lower() in ("0", "off", "false"):
@@ -4511,7 +4511,7 @@ class DesktopApp:
                     "on) asks for it."
                 )
 
-        # On-screen overlay in its own Tk daemon thread â€” the bus bridge reacts
+        # On-screen overlay in its own Tk daemon thread — the bus bridge reacts
         # to SystemStateChanged and drives whichever surface is selected.
         # Style is chosen by [ui].orb_style: "jarvis_bar" (slim default),
         # "mascot" / "voice_orb" (the two looks of the floating orb window), or
@@ -4528,7 +4528,7 @@ class DesktopApp:
             if orb_style != configured_style:
                 # The screen belongs to the default app (see boot_overlay_style).
                 logger.info(
-                    "On-screen overlay stays with the default app â€” the {} instance "
+                    "On-screen overlay stays with the default app — the {} instance "
                     "draws none (configured style={}).",
                     current_instance().label,
                     configured_style,
@@ -4570,7 +4570,7 @@ class DesktopApp:
                     # start; the bar keeps its voice-ready gate instead.
                     try:
                         surface.show("idle")
-                    except Exception:  # noqa: BLE001 â€” cosmetic; never block boot
+                    except Exception:  # noqa: BLE001 — cosmetic; never block boot
                         logger.debug("persistent overlay boot reveal failed", exc_info=True)
                 self._orb = surface
                 self._bridge = bridge
@@ -4591,7 +4591,7 @@ class DesktopApp:
             self._orb = None
             self._bridge = None
 
-        # Audio ducking â€” "Mute music while dictating" (Taskbar section). Its own
+        # Audio ducking — "Mute music while dictating" (Taskbar section). Its own
         # try so an overlay failure above does not skip it (and vice versa). The
         # controller no-ops when disabled / on a host without pycaw.
         try:
@@ -4607,7 +4607,7 @@ class DesktopApp:
 
         # Skill context wiring. Since the AD-S6 boot-race fix the brain
         # factory already set a minimal context at build time; this block is
-        # the idempotent UPGRADE to the authoritative instances â€” the web
+        # the idempotent UPGRADE to the authoritative instances — the web
         # server's watchdog-backed registry (hot-reload on SKILL.md edits)
         # and a runner with the populated mini tool registry. Setup errors
         # are non-fatal: the factory-time context keeps skills working.
@@ -4620,7 +4620,7 @@ class DesktopApp:
             # Bug fix 2026-05-09: do NOT create a second SkillRegistry.
             # The WebServer (server.py:_setup_skill_registry) already
             # created one + started its watchdog. A second instance here
-            # had a separate cache that never got reloaded â€” SKILL.md
+            # had a separate cache that never got reloaded — SKILL.md
             # edits then had no effect. Instead: reuse the existing
             # registry from app.state.
             skills_root = ensure_user_skills_dir()
@@ -4637,7 +4637,7 @@ class DesktopApp:
                 )
                 skill_registry.reload_sync()
 
-            # Mini tool registry for the SkillRunner â€” loads every plugin
+            # Mini tool registry for the SkillRunner — loads every plugin
             # tool that can be instantiated without args. Tools with
             # complex dependencies (dispatch-to-harness, spawn-worker) are
             # skipped; those are Jarvis-Agent specialties anyway, not meant for
@@ -4653,7 +4653,7 @@ class DesktopApp:
                     if _name and hasattr(_inst, "execute"):
                         skill_tool_registry[_name] = _inst
                 except Exception:  # noqa: S112
-                    continue  # Tool needs args â€” not relevant for skills.
+                    continue  # Tool needs args — not relevant for skills.
 
             skill_runner = SkillRunner(
                 registry=skill_registry,
@@ -4672,13 +4672,13 @@ class DesktopApp:
             from loguru import logger
 
             logger.opt(exception=exc).warning(
-                "SkillContext setup failed â€” the pipeline runs without the skill hook."
+                "SkillContext setup failed — the pipeline runs without the skill hook."
             )
 
-        # Pipeline deps: STT, TTS â€” brain is passed through by the caller
+        # Pipeline deps: STT, TTS — brain is passed through by the caller
         # (text-chat setup) so voice and chat share provider + history.
         # If brain is a MockBrain (fallback), voice TTS still works, but
-        # without real LLM output â†’ recognizable by its scripted replies.
+        # without real LLM output → recognizable by its scripted replies.
         try:
             from dodaios.plugins.tts import build_tts_from_config
             from dodaios.plugins.wake.openwakeword_provider import (
@@ -4700,10 +4700,10 @@ class DesktopApp:
             from dodaios.speech.wake_phrase import resolve_wake_plan
 
             _local_whisper_available = _ilu.find_spec("faster_whisper") is not None
-            # CONCRETE wake language (stt.language â†’ ui.language â†’ default), never
+            # CONCRETE wake language (stt.language → ui.language → default), never
             # raw "auto": a Vosk model is acoustically language-specific, so the
             # any-word vosk_kws engine must resolve against the language the user
-            # actually speaks â€” not the first-installed model. The same resolver
+            # actually speaks — not the first-installed model. The same resolver
             # drives the model DOWNLOAD (wake_model_fetch) so selection and
             # provisioning can never disagree.
             _wake_language = resolve_wake_language(self.cfg)
@@ -4716,7 +4716,7 @@ class DesktopApp:
 
             if not wake_plan.wake_available:
                 _wlog.info(
-                    "Wake-word OFF: no local model for {!r} â€” the Call shortcut "
+                    "Wake-word OFF: no local model for {!r} — the Call shortcut "
                     "is the activation. {}",
                     wake_plan.phrase,
                     wake_plan.message,
@@ -4725,7 +4725,7 @@ class DesktopApp:
                 _wlog.warning("Wake-word degraded: {}", wake_plan.message)
             else:
                 _wlog.info(
-                    "Wake-word plan: engine={} keyword={} phrase={!r} â€” {}",
+                    "Wake-word plan: engine={} keyword={} phrase={!r} — {}",
                     wake_plan.engine,
                     wake_plan.oww_keyword,
                     wake_plan.phrase,
@@ -4752,7 +4752,7 @@ class DesktopApp:
             # so the TTS + ack-brain builds overlap it instead of waiting it out.
             wake_task: asyncio.Task | None = None
             if self.cfg.trigger.heavy_local_whisper or wake_plan.needs_local_whisper:
-                # The local wake-match / live-preview Whisper â€” a SMALL model on
+                # The local wake-match / live-preview Whisper — a SMALL model on
                 # CPU (cfg.stt.wake_*), not the heavy utterance model on the GPU.
                 # On a Blackwell GPU the CUDA model-load JIT cost dominates boot
                 # (~71 s vs ~0.45 s for base/cpu, measured); wake matching is
@@ -4774,12 +4774,12 @@ class DesktopApp:
                 # Build the local wake-Whisper OFF the event loop: it probes CUDA
                 # availability, whose first-call context init JIT-compiles for
                 # ~30-60 s on a Blackwell GPU (cold cache). Offloading keeps the
-                # backend responsive â€” a desktop app must never freeze its UI
+                # backend responsive — a desktop app must never freeze its UI
                 # while a subsystem warms up. The persisted probe cache
                 # (dodaios.plugins.stt._wake_cuda_available) makes this near-instant
                 # on every boot after the first.
                 # Start the wake-model build in a worker thread but DON'T block
-                # on it here â€” the TTS + ack-brain builds below run on the loop
+                # on it here — the TTS + ack-brain builds below run on the loop
                 # thread WHILE it loads (the wake C-extension / CUDA load releases
                 # the GIL), overlapping their cost instead of paying it after the
                 # ~3-5 s wake build. Joined right before the pipeline ctor. The
@@ -4803,7 +4803,7 @@ class DesktopApp:
             _t_tts = time.perf_counter()
             # SpeechPipeline.brain_callback needs Callable[[str], Awaitable[str]].
             # BrainManager and the Echo/Gemini fallback satisfy that via __call__.
-            # MockBrain does not (it only has respond()) â†’ gets its own voice brain.
+            # MockBrain does not (it only has respond()) → gets its own voice brain.
             voice_brain: Any = brain
             if not callable(voice_brain) or hasattr(voice_brain, "respond"):
                 from loguru import logger
@@ -4811,17 +4811,17 @@ class DesktopApp:
                 from dodaios.brain.factory import build_default_brain as _bdb
 
                 logger.info(
-                    "Shared brain is not directly callable â€” building a dedicated voice brain."
+                    "Shared brain is not directly callable — building a dedicated voice brain."
                 )
                 voice_brain = _bdb(tier="router")
-            # Pass output_device through from config â€” otherwise AudioPlayer
+            # Pass output_device through from config — otherwise AudioPlayer
             # falls back to the system default, which on Windows is often
             # MME idx=3 with a mono-to-8-channel routing bug (the user then
             # hears nothing).
             # Permanent vision: the voice brain (router tier) hangs its
             # VisionContextProvider off `_vision_provider`. Without passing
             # it through, the background loop never starts and every
-            # router turn gets `current()=None` â†’ a silent failure (no
+            # router turn gets `current()=None` → a silent failure (no
             # image in the prompt).
             voice_vision = getattr(voice_brain, "_vision_provider", None)
             # Pre-Thinking-Ack Flash-Brain: builds an AckGenerator if
@@ -4833,8 +4833,8 @@ class DesktopApp:
             _t_ack = time.perf_counter()
             # Join the wake-model build started above (it loaded in its worker
             # thread WHILE the TTS + ack-brain were built here). On failure
-            # re-raise to the outer handler â€” voice degrades exactly as the
-            # previous inline ``await`` did â€” and cancel the task so the worker
+            # re-raise to the outer handler — voice degrades exactly as the
+            # previous inline ``await`` did — and cancel the task so the worker
             # thread's result is never left orphaned.
             if wake_task is not None:
                 try:
@@ -4850,7 +4850,7 @@ class DesktopApp:
                 ptt_hotkeys=_ptt_hk,
                 # Dictation. Both keys ship bound to a curated combo (see
                 # TriggerConfig.hotkey_dictate); either can be cleared in the
-                # Voice â†’ Shortcuts tab, and both live-re-arm without a restart.
+                # Voice → Shortcuts tab, and both live-re-arm without a restart.
                 dictate_hotkeys=(
                     (self.cfg.trigger.hotkey_dictate,)
                     if self.cfg.trigger.hotkey_dictate.strip()
@@ -4863,7 +4863,7 @@ class DesktopApp:
                 ),
                 # "Insert the last dictation again". Editable in the same tab,
                 # so it has to be armed here for the same reason the two above
-                # are â€” a shortcut the UI can change but the pipeline never
+                # are — a shortcut the UI can change but the pipeline never
                 # reads is a row that lies.
                 paste_last_hotkeys=(
                     (self.cfg.trigger.hotkey_paste_last,)
@@ -4893,7 +4893,7 @@ class DesktopApp:
                 # episode 4 made OWW fire on the entire ambient band (idle
                 # telemetry showed bare "Hallo"/room noise scoring 0.06-0.11 and
                 # popping the orb on every word). Threshold is now a single
-                # documented constant â€” see PRODUCTION_WAKE_THRESHOLD and the
+                # documented constant — see PRODUCTION_WAKE_THRESHOLD and the
                 # data-driven reasoning in openwakeword_provider.py. The precise
                 # RollingWhisperWake remains enabled below as the low-volume
                 # safety net, so raising OWW back above the ambient band does
@@ -4940,7 +4940,7 @@ class DesktopApp:
                 # Strict "Hey"-prefix verification for OpenWakeWord hits. With
                 # this flag on (default in cfg.trigger.require_hey_prefix), an
                 # OWW score crossing the activation threshold is only a
-                # candidate â€” the cloud STT must confirm the prefix in the
+                # candidate — the cloud STT must confirm the prefix in the
                 # rolling buffer before the wake fires. Closes the bare-
                 # "Jarvis" false-fire path without pendulumming the OWW
                 # threshold (BUG-009).
@@ -5001,13 +5001,13 @@ class DesktopApp:
             _t_ctor = time.perf_counter()
             # Targeted boot-timing breakdown so the log shows exactly which voice
             # build step costs what (the wake-Whisper CUDA probe was the hidden
-            # ~60 s "VOICE STARTINGâ€¦" stall before the persisted probe cache).
+            # ~60 s "VOICE STARTING…" stall before the persisted probe cache).
             from loguru import logger as _vlog
 
             # Stamps now reflect the OVERLAPPED build: TTS + ack-brain run on the
             # loop thread while the wake model loads in its worker thread, so
             # ``wake_join`` is only the wake time NOT already hidden behind them
-            # (â‰ˆ0 when fully overlapped). total is wall-clock for the whole build.
+            # (≈0 when fully overlapped). total is wall-clock for the whole build.
             _vlog.info(
                 "Voice setup build timings (ms): tts={:.0f} ack_brain={:.0f} "
                 "wake_join={:.0f} pipeline_ctor={:.0f} total={:.0f}",
@@ -5018,11 +5018,11 @@ class DesktopApp:
                 (_t_ctor - _t_build0) * 1000.0,
             )
             # Put the pipeline reference for live provider switches (TTS) on
-            # app.state â€” the /api/tts/switch endpoint builds a new TTS
+            # app.state — the /api/tts/switch endpoint builds a new TTS
             # provider on a UI change and calls pipeline.set_tts() without
             # restarting the whole pipeline (a Whisper reload would be
             # expensive). Note: ``server`` isn't in scope here (the method
-            # signature only takes loop/bus/supervisor/brain) â€” we use
+            # signature only takes loop/bus/supervisor/brain) — we use
             # ``self._server``, which ``_run_backend`` assigns right after
             # the ``WebServer(...)`` construction.
             if self._server is not None:
@@ -5048,14 +5048,14 @@ class DesktopApp:
                 exc = task.exception()
                 if exc is not None:
                     logger.opt(exception=exc).error(
-                        "Speech pipeline died â€” voice offline until restart."
+                        "Speech pipeline died — voice offline until restart."
                     )
 
             self._pipeline_task.add_done_callback(_on_pipeline_done)
             # Log the ACTUAL configured wake word, not a hardcoded "Hey Jarvis"
             # (the custom phrase, e.g. "Luca", or the openWakeWord keyword).
             logger.info(
-                "Speech pipeline started â€” wake: {!r}.",
+                "Speech pipeline started — wake: {!r}.",
                 wake_plan.phrase or wake_plan.oww_keyword or "?",
             )
             if getattr(self, "_bp", False):
@@ -5069,7 +5069,7 @@ class DesktopApp:
 
                 # HONEST usable anchor: VoiceBootStatus(ready=True) is published
                 # exactly once the wake model is warmed AND VAD AND the TTS
-                # client are up (the end of _warmup_deferred_loaders â€” the
+                # client are up (the end of _warmup_deferred_loaders — the
                 # "it says ready but I can't talk" contract, 2026-06-29). The
                 # TTU benchmark (measure_desktop_boot.py --voice) anchors on
                 # THIS print; anchoring on the pipeline start above measured a
@@ -5089,13 +5089,13 @@ class DesktopApp:
                 bus.subscribe(_VBS, _print_voice_usable)
 
             # Wake-model GIL-priority gate: signal the heavy backend (brain/mcp)
-            # to resume as soon as the LIGHT base/cpu wake model has loaded â€” or
+            # to resume as soon as the LIGHT base/cpu wake model has loaded — or
             # immediately if there is no local wake model (e.g. the OWW path), so
             # the backend never waits needlessly.
             def _wake_model_is_loaded() -> bool:
                 # Prefer the ACTIVE wake detector's own warm signal. The
                 # any-word vosk_kws engine loads one Kaldi model per installed
-                # language inside ``wake.start()`` â€” the STT-based probes below
+                # language inside ``wake.start()`` — the STT-based probes below
                 # know nothing about it, so the gate used to release while
                 # those loads were still running and the heavy backend storm
                 # stretched a few-second load to 30+ s per model (live
@@ -5143,12 +5143,12 @@ class DesktopApp:
             # heavier turbo/cuda model in the BACKGROUND for faster steady-state
             # inference, so a custom phrase comes up fast AND stays accurate. No-op
             # on a CPU-only host (the build returns base again). Any failure leaves
-            # the working base/cpu model in place â€” wake never breaks.
+            # the working base/cpu model in place — wake never breaks.
             # CPU-first default (2026-07-09): the background turbo/cuda hot-swap
             # only runs when the user explicitly opted into GPU wake
             # (``[stt].wake_high_accuracy = true``). With the CPU default the
             # rebuild below would just return base and no-op, so skip it entirely
-            # â€” that also avoids the sticky wake_cuda/gpu_probe caches that made a
+            # — that also avoids the sticky wake_cuda/gpu_probe caches that made a
             # once-fast GPU wake go permanently deaf after a restart.
             if _wake_progressive_upgrade and bool(
                 getattr(self.cfg.stt, "wake_high_accuracy", False)
@@ -5164,7 +5164,7 @@ class DesktopApp:
 
                         ww = getattr(pipeline, "_whisper_wake", None)
                         # Wait until the base/cpu wake model is loaded (the same
-                        # gate the heavy backend uses) BEFORE loading turbo â€”
+                        # gate the heavy backend uses) BEFORE loading turbo —
                         # loading turbo in parallel races the base load on the
                         # GIL/CUDA-init lock and doubled it (~3 s -> ~20 s,
                         # measured 2026-06-27). Wake is already live on base while
@@ -5185,14 +5185,14 @@ class DesktopApp:
                             fast_first=False,
                         )
                         if getattr(turbo, "_model_name", "base") == "base":
-                            return  # no GPU upgrade available â€” keep base/cpu
+                            return  # no GPU upgrade available — keep base/cpu
                         # WARM-UP, not just load: ``warm_up`` runs one real
                         # inference so the turbo/cuda kernels are primed BEFORE
                         # the ref swap below makes it the live wake model. Without
                         # this the first "Hey Jarvis" after the swap hits a cold
                         # CUDA inference (kernel JIT / cuDNN search, several
                         # seconds) and is swallowed by the rolling-window wake
-                        # loop â€” the same first-wake-missed bug the boot pre-warm
+                        # loop — the same first-wake-missed bug the boot pre-warm
                         # fixes (forensic 2026-06-28). Falls back to a plain load
                         # for any STT without the prime hook.
                         _turbo_prime = getattr(turbo, "warm_up", None)
@@ -5206,7 +5206,7 @@ class DesktopApp:
                             # missed), the rolling wake's self-heal swaps back
                             # to this fallback and persists the bad verdict
                             # (mark_wake_gpu_bad) instead of rebuilding the
-                            # same hung CUDA model â€” bounded-time recovery to
+                            # same hung CUDA model — bounded-time recovery to
                             # the pre-upgrade state. ~80 MB RAM held on purpose.
                             turbo._wake_gpu_fallback = ww._stt
                             # Atomic ref swap (GIL); the next transcribe uses turbo.
@@ -5215,7 +5215,7 @@ class DesktopApp:
                                 "Wake-model upgraded base/cpu -> turbo/cuda "
                                 "(background hot-swap; faster steady-state inference)."
                             )
-                    except Exception as exc:  # noqa: BLE001 â€” base/cpu stays; wake never breaks
+                    except Exception as exc:  # noqa: BLE001 — base/cpu stays; wake never breaks
                         logger.warning(
                             "Wake-model turbo upgrade failed (staying on base/cpu): %s",
                             exc,
@@ -5231,11 +5231,11 @@ class DesktopApp:
             # fatal speech-pipeline init crash used to degrade to a SILENT
             # warning, so voice went dead with no signal at all. Degrading is
             # still allowed (cloud-first: the app must not die without a mic),
-            # but never silently â€” ERROR-level log PLUS an audible disconnect
+            # but never silently — ERROR-level log PLUS an audible disconnect
             # tone so a voice-first user notices immediately. AD-OE6 ("zero
             # silent drops").
             logger.opt(exception=exc).error(
-                "VOICE OFFLINE â€” Speech-Pipeline crashed at startup; "
+                "VOICE OFFLINE — Speech-Pipeline crashed at startup; "
                 "'Hey Jarvis' will not respond until restart."
             )
             try:
@@ -5245,15 +5245,15 @@ class DesktopApp:
                     play_voice_offline_alert(self.cfg.audio.output_device or None),
                     name="voice-offline-alert",
                 )
-            except Exception:  # noqa: BLE001 â€” the alert must never crash boot
+            except Exception:  # noqa: BLE001 — the alert must never crash boot
                 logger.debug("could not schedule voice-offline alert", exc_info=True)
             # UI un-stick (permanent "Getting ready to listen" bug): the frontend's
-            # startup banner + top-left "STARTINGâ€¦" status clear ONLY when a
+            # startup banner + top-left "STARTING…" status clear ONLY when a
             # VoiceBootStatus(ready=True) is published. A crash in pipeline
             # construction here would otherwise publish NO status at all (warm-up
             # never runs), so the banner sticks forever even though the user can
             # already type. Voice is genuinely offline, so emit ready=True with an
-            # honest "voice_unavailable" detail to release the UI â€” text works,
+            # honest "voice_unavailable" detail to release the UI — text works,
             # voice does not until restart. Guarded so the un-stick never re-crashes
             # boot. (A slower, pipeline-independent backstop also lives in the
             # WebServer's voice-ready watchdog for the warm-up-hang case.)
@@ -5265,19 +5265,19 @@ class DesktopApp:
                         bus.publish(_VBS(ready=True, detail="voice_unavailable")),
                         name="voice-offline-ready-signal",
                     )
-            except Exception:  # noqa: BLE001 â€” the un-stick must never crash boot
+            except Exception:  # noqa: BLE001 — the un-stick must never crash boot
                 logger.debug("could not publish voice-unavailable ready signal", exc_info=True)
 
     def _install_focus_route(self, server: WebServer) -> None:
         """Replaces the placeholder ``/api/window/focus`` with a real call.
 
-        server.py registers a no-op handler in its constructor â€” we remove
+        server.py registers a no-op handler in its constructor — we remove
         it from ``app.routes`` and register our own in its place. This is
         safe before ``server.start()`` because no requests are being
         routed yet.
         """
         app = server.app
-        # FastAPI.routes is a property without a setter â€” filter in place
+        # FastAPI.routes is a property without a setter — filter in place
         # instead of reassigning. app.router.routes is the underlying list.
         app.router.routes[:] = [
             r for r in app.router.routes if not (getattr(r, "path", None) == "/api/window/focus")
@@ -5291,7 +5291,7 @@ class DesktopApp:
             try:
                 # Off the event loop: pywebview window methods are thread-safe
                 # (they dispatch internally to the GUI thread) but they BLOCK
-                # the calling thread while the GUI thread services them â€” the
+                # the calling thread while the GUI thread services them — the
                 # same class of on-loop stall that starved the realtime mic
                 # sender on 2026-08-06. The route thread-hops instead.
                 return await asyncio.to_thread(desktop._focus_window_now)
@@ -5303,7 +5303,7 @@ class DesktopApp:
     def _focus_window_now(self) -> dict[str, Any]:
         """Show + raise the desktop window, synchronously, on the CALLING thread.
 
-        Blocking by design â€” callers on the asyncio loop must thread-hop
+        Blocking by design — callers on the asyncio loop must thread-hop
         (``asyncio.to_thread``); the tray bridge and worker threads may call it
         directly. Split out of the ``/api/window/focus`` route so tests can pin
         the off-loop contract without a running server.
@@ -5351,7 +5351,7 @@ class DesktopApp:
         exact match drives focus and the taskbar icon), so it must never equal
         the main window's ``WINDOW_TITLE``.
         """
-        return f"{WINDOW_TITLE} â€” {DETACHABLE_VIEWS[view]}"
+        return f"{WINDOW_TITLE} — {DETACHABLE_VIEWS[view]}"
 
     def set_fullscreen(self, enabled: bool) -> dict[str, Any]:
         """Set the main window's fullscreen state without blocking the API loop."""
@@ -5490,13 +5490,13 @@ class DesktopApp:
         return window_background(self._configured_theme())
 
     def _configured_theme(self) -> str:
-        """The user's ``[ui] theme`` value â€” may still be ``system``."""
+        """The user's ``[ui] theme`` value — may still be ``system``."""
         from dodaios.ui.theme import configured_theme
 
         return configured_theme(getattr(self, "cfg", None))
 
     def _resolved_theme(self) -> str:
-        """``dark`` or ``light`` â€” ``system`` resolved against the desktop.
+        """``dark`` or ``light`` — ``system`` resolved against the desktop.
 
         The blank-window explanation page paints itself from this, so it lands
         inside the native frame as one surface rather than a black rectangle in
@@ -5507,14 +5507,14 @@ class DesktopApp:
         return resolve_theme(self._configured_theme())
 
     def open_detached_window(self, view: str, query: str = "") -> dict[str, Any]:
-        """Open ``view`` in its own solo window â€” MUST run on a worker thread.
+        """Open ``view`` in its own solo window — MUST run on a worker thread.
 
         pywebview materializes runtime windows only from a thread whose name is
-        not ``MainThread``, and every window call blocks its caller â€” both
+        not ``MainThread``, and every window call blocks its caller — both
         reasons the ``/api/window/detach`` route gets here via
         ``asyncio.to_thread``. Idempotent: an already-detached view is focused,
         not duplicated. Every failure returns a reasoned ``ok: false`` with a
-        ``fallback_url`` so the frontend can open a browser tab instead â€” the
+        ``fallback_url`` so the frontend can open a browser tab instead — the
         honest degrade on hosts whose webview backend cannot create runtime
         windows.
         """
@@ -5536,7 +5536,7 @@ class DesktopApp:
         existing = self._detached_windows.get(view)
         if existing is not None and view == "appshot-editor":
             # The editor window is kept warm and hidden between uses: point it
-            # at the appshot in place and show it â€” no reload, no boot screen.
+            # at the appshot in place and show it — no reload, no boot screen.
             return self._show_warm_editor(existing, query, fallback)
         if existing is not None:
             if query:
@@ -5568,12 +5568,12 @@ class DesktopApp:
                 _bring_window_to_front_by_title(self._detached_title(view))
             return {"ok": True, "already_open": True, "view": view}
         if self._window is None and not self._detached_windows:
-            # No live window means no running GUI loop to attach to â€”
+            # No live window means no running GUI loop to attach to —
             # pywebview's runtime create marshals onto an existing window's
             # UI thread and would raise on an empty instance map.
             return {"ok": False, "reason": "no_live_window", "fallback_url": fallback}
         try:
-            import webview  # noqa: PLC0415 â€” [desktop] extra, never module-level
+            import webview  # noqa: PLC0415 — [desktop] extra, never module-level
 
             title = self._detached_title(view)
             width, height = detached_window_size(view, _primary_screen_size(webview))
@@ -5593,7 +5593,7 @@ class DesktopApp:
             )
         except Exception as exc:  # noqa: BLE001
             # WebViewException on a backend that cannot create runtime windows
-            # (the macOS/GTK live-check risk) â€” the reason travels back and the
+            # (the macOS/GTK live-check risk) — the reason travels back and the
             # frontend falls back to a real browser tab.
             from loguru import logger
 
@@ -5676,7 +5676,7 @@ class DesktopApp:
         if self._window is None:
             return {"ok": False, "reason": "no_live_window"}
         try:
-            import webview  # noqa: PLC0415 â€” [desktop] extra, never module-level
+            import webview  # noqa: PLC0415 — [desktop] extra, never module-level
 
             width, height = detached_window_size(view, _primary_screen_size(webview))
             window = webview.create_window(
@@ -5706,7 +5706,7 @@ class DesktopApp:
         return {"ok": True, "already_open": False}
 
     def close_detached_window(self, view: str) -> dict[str, Any]:
-        """Close the detached window for ``view`` â€” worker-thread only.
+        """Close the detached window for ``view`` — worker-thread only.
 
         Deregistration and the ``DetachedViewClosed`` event happen in the
         window's ``closed`` hook, so this path and the user's own X on the
@@ -5733,7 +5733,7 @@ class DesktopApp:
         return {"ok": True, "view": view}
 
     def detached_views_snapshot(self) -> list[str]:
-        """Currently detached view ids â€” the GET /api/window/detached payload."""
+        """Currently detached view ids — the GET /api/window/detached payload."""
         return list(self._detached_windows)
 
     def _on_detached_closed(self, view: str) -> None:
@@ -5742,7 +5742,7 @@ class DesktopApp:
         Deregisters the view and mirrors the change to every window. When this
         was the LAST window of the process (main already closed), mark the
         quit: ``webview.start()`` returns next and ``run_window_only`` runs the
-        normal shutdown + hard-exit backstop â€” the "nothing lingers after the
+        normal shutdown + hard-exit backstop — the "nothing lingers after the
         last window closes" mandate, held.
         """
         self._detached_windows.pop(view, None)
@@ -5757,7 +5757,7 @@ class DesktopApp:
         self._sync_background_tray()
 
     def _inject_into_secondary(self, window: Any, view: str) -> None:
-        """Prime a freshly loaded detached window â€” ``loaded`` hook.
+        """Prime a freshly loaded detached window — ``loaded`` hook.
 
         Injects the embedded-shell flag (drives shell detection, dictation
         delivery, open-external routing). Never the realtime broker token: only
@@ -5785,14 +5785,14 @@ class DesktopApp:
             # ("largest window of the process") is ambiguous.
             set_window_icon_by_title(self._detached_title(view), project_icon_path())
         except Exception:  # noqa: BLE001, S110
-            # Cosmetic and Win32-only â€” the window works with the default icon.
+            # Cosmetic and Win32-only — the window works with the default icon.
             pass
 
     def _publish_detached_event_threadsafe(self, view: str, *, opened: bool) -> None:
         """Publish DetachedViewOpened/Closed from a non-async thread.
 
         Best-effort, mirrors ``_publish_kill_requested_threadsafe``: during
-        early boot or teardown the backend loop/bus may be gone â€” then there is
+        early boot or teardown the backend loop/bus may be gone — then there is
         no frontend listening either, so log instead of raising.
         """
         from loguru import logger
@@ -5813,11 +5813,11 @@ class DesktopApp:
 
             event = DetachedViewOpened(view=view) if opened else DetachedViewClosed(view=view)
             asyncio.run_coroutine_threadsafe(bus.publish(event), loop)
-        except Exception:  # noqa: BLE001 â€” window plumbing must survive bus loss
+        except Exception:  # noqa: BLE001 — window plumbing must survive bus loss
             logger.opt(exception=True).warning("Detached-view event publish failed.")
 
     def _destroy_all_windows(self) -> None:
-        """Destroy every window â€” detached first, main last. Teardown helper.
+        """Destroy every window — detached first, main last. Teardown helper.
 
         ``webview.start()`` only returns once the LAST window closes, so every
         full-quit path (tray Quit, self-restart, Terms decline) must sweep the
@@ -5843,7 +5843,7 @@ class DesktopApp:
         self._destroy_background_keeper()
 
     def _main_window_kwargs(self) -> dict[str, Any]:
-        """The main window's ``create_window`` kwargs â€” one source of truth.
+        """The main window's ``create_window`` kwargs — one source of truth.
 
         Used by the boot path AND by ``_ensure_main_window`` when the tray
         reopens a main window that was closed while a detached view lived on.
@@ -5876,7 +5876,7 @@ class DesktopApp:
 
     @staticmethod
     def _register_native_drop(window: Any) -> None:
-        """Wire the drop-path bridge into a freshly loaded page â€” never raises."""
+        """Wire the drop-path bridge into a freshly loaded page — never raises."""
         try:
             from dodaios.ui.native_drop import register_native_drop  # noqa: PLC0415
 
@@ -5890,7 +5890,7 @@ class DesktopApp:
         Nulls the handle so every null-guarded path (focus route, tray show,
         stale-reload) degrades honestly while detached windows keep the
         process alive. Without detached windows the quit flag is already set
-        and ``webview.start()`` is about to return â€” nulling is harmless.
+        and ``webview.start()`` is about to return — nulling is harmless.
         """
         self._window = None
         self._window_visible = False
@@ -5918,12 +5918,12 @@ class DesktopApp:
             self._sync_background_tray()
 
     def _ensure_main_window_unlocked(self) -> None:
-        """Show the main window, recreating it if it was closed â€” tray thread.
+        """Show the main window, recreating it if it was closed — tray thread.
 
         With detached windows, closing main no longer quits; the tray "Open"
         must then bring a NEW main window back. Runs on the tray bridge thread
-        (non-MainThread â†’ pywebview accepts the runtime create). Failure is an
-        honest logged no-op â€” the tray must survive it.
+        (non-MainThread → pywebview accepts the runtime create). Failure is an
+        honest logged no-op — the tray must survive it.
         """
         if self._window is not None:
             self._safe_window_show()
@@ -5931,7 +5931,7 @@ class DesktopApp:
         from loguru import logger
 
         try:
-            import webview  # noqa: PLC0415 â€” [desktop] extra, never module-level
+            import webview  # noqa: PLC0415 — [desktop] extra, never module-level
 
             self._window = webview.create_window(
                 WINDOW_TITLE, self._url(), **self._main_window_kwargs()
@@ -5944,7 +5944,7 @@ class DesktopApp:
             self._arm_blank_window_watchdog(self._window)
         except Exception:  # noqa: BLE001
             logger.opt(exception=True).warning(
-                "Reopening the main window failed â€” it stays closed."
+                "Reopening the main window failed — it stays closed."
             )
             return
         try:
@@ -5982,7 +5982,7 @@ class DesktopApp:
         token in a URL.
 
         This is also where the taskbar/titlebar icon gets set. pywebview
-        does not expose an icon parameter on Windows â€” we go through the
+        does not expose an icon parameter on Windows — we go through the
         HWND via FindWindowW (a unique title is guaranteed by the
         single-instance lock).
         """
@@ -6070,11 +6070,11 @@ class DesktopApp:
     def _wait_for_backend(self, timeout_s: float = 45.0, hard_timeout_s: float = 180.0) -> bool:
         """Polls ``/api/health`` until it returns 200 or the timeout expires.
 
-        45s default â€” Whisper/VAD models are loaded on first initialization
+        45s default — Whisper/VAD models are loaded on first initialization
         and block the event loop synchronously for up to ~20s.
 
         If the backend thread has already died (missing import, bind error),
-        return immediately â€” waiting out the timeout just hides the reason
+        return immediately — waiting out the timeout just hides the reason
         under pythonw for 45 seconds.
 
         A LIVE backend thread that merely has not bound yet is a different
@@ -6099,7 +6099,7 @@ class DesktopApp:
                 from loguru import logger
 
                 logger.warning(
-                    "Backend still binding after {:.0f} s â€” the thread is alive, "
+                    "Backend still binding after {:.0f} s — the thread is alive, "
                     "so this looks like a starved cold boot; waiting up to "
                     "{:.0f} s instead of failing.",
                     elapsed,
@@ -6123,8 +6123,8 @@ class DesktopApp:
         """The ONE client the health probe reuses. ``None`` when httpx is absent.
 
         ``httpx.get()`` is a client per call, and building a client builds an
-        SSL context â€” ``ssl.create_default_context()`` reads and parses the
-        whole CA bundle â€” even when the URL is plain ``http://`` on loopback
+        SSL context — ``ssl.create_default_context()`` reads and parses the
+        whole CA bundle — even when the URL is plain ``http://`` on loopback
         and no certificate will ever be checked. At one probe a second that is
         a CA bundle parsed 3600 times an hour for nothing.
 
@@ -6164,7 +6164,7 @@ class DesktopApp:
         return client
 
     def _backend_healthy(self) -> bool:
-        """One quick ``/api/health`` probe â€” is the server answering right now?
+        """One quick ``/api/health`` probe — is the server answering right now?
 
         Deliberately single-shot and short: the blank-window watchdog asks every
         few seconds and needs the ANSWER, including the honest "no" while the
@@ -6185,18 +6185,18 @@ class DesktopApp:
             if r.status_code == 200:
                 try:
                     warming = bool(r.json().get("warming"))
-                except Exception:  # noqa: BLE001 â€” a non-JSON health body means the real app
+                except Exception:  # noqa: BLE001 — a non-JSON health body means the real app
                     warming = False
             self._backend_warming_flag = warming
             return bool(r.status_code == 200)
-        except Exception:  # noqa: BLE001 â€” an unreachable server is the answer
+        except Exception:  # noqa: BLE001 — an unreachable server is the answer
             self._backend_warming_flag = False
             return False
 
     def _backend_warming(self) -> bool:
         """Was the last health answer the bootstrap's ``warming: true``?
 
-        Piggybacks on ``_backend_healthy``'s response instead of probing again â€”
+        Piggybacks on ``_backend_healthy``'s response instead of probing again —
         the blank-window watchdog calls both within one tick, and a second HTTP
         request per tick would double the probe cost for the same byte.
         """
@@ -6214,7 +6214,7 @@ class DesktopApp:
         return True if thread is None else bool(thread.is_alive())
 
     def _arm_blank_window_watchdog(self, window: Any) -> None:
-        """Guard *window* against staying blank without a word â€” never raises.
+        """Guard *window* against staying blank without a word — never raises.
 
         Every path that creates the MAIN window funnels through here (boot and
         the tray's reopen), so both are covered by one guard with one policy.
@@ -6241,7 +6241,7 @@ class DesktopApp:
             from loguru import logger
 
             logger.opt(exception=True).warning(
-                "Blank-window watchdog could not be armed â€” the window is "
+                "Blank-window watchdog could not be armed — the window is "
                 "unguarded for this session."
             )
 
@@ -6262,7 +6262,7 @@ class DesktopApp:
         Classic boot: start the backend thread here, then run the window. The
         fast-boot launcher path starts the backend thread itself (so the
         bootstrap binds BEFORE the heavy imports) and calls ``run_window_only``
-        directly â€” both share the identical window code below.
+        directly — both share the identical window code below.
         """
         self._backend_thread = threading.Thread(
             target=self._run_backend,
@@ -6276,12 +6276,12 @@ class DesktopApp:
         """The main-thread pywebview window. Assumes the backend thread is
         already running (started by :meth:`run` or the fast-boot launcher)."""
         if sys.platform == "darwin":
-            # BUG-065: snapshot the keyboard layout HERE â€” the one chokepoint
-            # every desktop boot path runs on the main thread â€” so pynput
+            # BUG-065: snapshot the keyboard layout HERE — the one chokepoint
+            # every desktop boot path runs on the main thread — so pynput
             # (global hotkeys, CU keyboard actuation) never has to call the
             # TIS APIs from a worker thread. On macOS 15 an off-main TIS call
             # is an uncatchable process kill (SIGILL). Microseconds, ctypes
-            # only â€” no heavy import (AP-26).
+            # only — no heavy import (AP-26).
             from dodaios.platform.macos_input_source import (
                 prime_keyboard_layout_cache,
             )
@@ -6292,7 +6292,7 @@ class DesktopApp:
         # click that resolved to python.exe instead of the windowless
         # pythonw.exe), Windows hands us a black terminal that fills with
         # loguru's stderr output and confuses users. If we EXCLUSIVELY own that
-        # console we hide it here â€” the sole-owner check leaves a developer's own
+        # console we hide it here — the sole-owner check leaves a developer's own
         # terminal and ``run.bat --debug`` (cmd.exe still attached) visible.
         # This is the single chokepoint every window path (classic + fast-boot)
         # funnels through, so it fixes every launch path at once. No-op under
@@ -6305,7 +6305,7 @@ class DesktopApp:
                 "launched via python.exe instead of pythonw.exe)."
             )
         # Claim PER_MONITOR_AWARE before pywebview can downgrade the process to
-        # SYSTEM-aware (webview.start does at runtime) â€” the downgrade
+        # SYSTEM-aware (webview.start does at runtime) — the downgrade
         # virtualizes window rects on mixed-DPI monitors and made Computer-Use
         # click hundreds of pixels off on the secondary screen (live forensic
         # 2026-07-02). Windows honours only the FIRST claim; idempotent no-op
@@ -6317,7 +6317,7 @@ class DesktopApp:
         # otherwise builds it in response to the first query and answers that
         # query from the unbuilt one, so every dictation app, text expander and
         # password-manager auto-type saw a window with no fields in it. Must
-        # happen before the WebView exists â€” the flag is read when the browser
+        # happen before the WebView exists — the flag is read when the browser
         # process starts. Costs nothing at boot: it sets one variable.
         from dodaios.platform.webview_accessibility import (
             enable_webview_accessibility_tree,
@@ -6333,14 +6333,14 @@ class DesktopApp:
         try:
             import webview  # type: ignore[import-not-found]
         except ModuleNotFoundError as exc:
-            # pywebview is missing from THIS interpreter â€” which does not mean
+            # pywebview is missing from THIS interpreter — which does not mean
             # it is missing from the machine. With several Python installations
             # around, a shortcut, scheduled task or launcher that resolves to
             # the wrong one lands here (forensic 2026-08-09), as does an install
             # that skipped the ``[desktop]`` extra. Crashing would also kill the
             # backend thread that is already booting, so take the same honest
             # degradation the missing-native-backend case takes, and name the
-            # interpreter â€” that name IS the diagnosis.
+            # interpreter — that name IS the diagnosis.
             return self._degrade_to_browser_ui(
                 exc,
                 remedy=(
@@ -6358,14 +6358,14 @@ class DesktopApp:
 
                 _report_startup_failure(detail)
                 reported = True
-            except Exception:  # noqa: BLE001, S110 â€” dialog is best-effort
+            except Exception:  # noqa: BLE001, S110 — dialog is best-effort
                 pass
             if not reported:
                 sys.stderr.write(detail + "\n")
             return self.shutdown() or 2
 
         # The frame is painted before the web view has loaded a single byte, so
-        # it must already know the user's theme â€” otherwise a light app spends
+        # it must already know the user's theme — otherwise a light app spends
         # its entire boot inside a black window (_main_window_kwargs derives the
         # background from the configured theme for exactly this reason).
         try:
@@ -6385,12 +6385,12 @@ class DesktopApp:
             return self._degrade_to_browser_ui(exc)
         self._window_visible = True
         # From here the window is the user's only surface. If it never receives
-        # a page â€” a frozen loop, a dead backend thread, a view that did not
-        # navigate â€” nothing INSIDE it can report that, because there is no
+        # a page — a frozen loop, a dead backend thread, a view that did not
+        # navigate — nothing INSIDE it can report that, because there is no
         # inside. This guard lives outside and heals or explains it.
         self._arm_blank_window_watchdog(self._window)
 
-        # The X quits (when this is the last window) â€” see _on_window_closing â€”
+        # The X quits (when this is the last window) — see _on_window_closing —
         # and the closed hook nulls the handle so detached windows can outlive
         # a closed main window. Extracted so the contract is unit-testable
         # (test_desktop_minimize_to_tray_overlay.py, test_desktop_detached_windows.py).
@@ -6402,7 +6402,7 @@ class DesktopApp:
 
         # Start the taskbar icon setter as a parallel polling thread.
         # pywebview only calls ``func`` (``_inject_token``) after the
-        # ``shown`` event â€” by then Windows has already rendered the
+        # ``shown`` event — by then Windows has already rendered the
         # taskbar entry with the pythonw.exe default icon and cached that
         # mapping. We poll FindWindowW every 50 ms and set WM_SETICON as
         # soon as the HWND exists. That's the earliest point at which the
@@ -6414,7 +6414,7 @@ class DesktopApp:
 
         # Linux: pin the window's WM_CLASS to match the .desktop's StartupWMClass
         # BEFORE the GTK window is created, and install the applications-menu
-        # .desktop entry that carries the icon those two bind to â€” together they
+        # .desktop entry that carries the icon those two bind to — together they
         # make the taskbar/dock show the Jarvis icon instead of the generic
         # python3 interpreter icon. macOS: set the Dock icon on the shared
         # NSApplication (a bare interpreter run otherwise shows the Python
@@ -6434,7 +6434,7 @@ class DesktopApp:
 
         # Native file drag-out: dragging a saved-download toast drops the REAL
         # file into any app (Explorer, a browser upload zone, a chat). Must be
-        # installed BEFORE webview.start() â€” it patches the WebView host's
+        # installed BEFORE webview.start() — it patches the WebView host's
         # UI-thread message handler so the OS drag runs where the mouse press
         # lives. Windows and macOS are native; Linux is a logged no-op until its
         # GTK source lands. Never blocks the window.
@@ -6464,13 +6464,13 @@ class DesktopApp:
         #
         # On Linux, webview.start selects the native GUI backend here and raises
         # WebViewException when neither GTK+WebKit nor Qt (with Python bindings)
-        # is installed â€” a system dependency pip cannot provide. Do NOT let that
+        # is installed — a system dependency pip cannot provide. Do NOT let that
         # crash the app or tear down the backend thread that is already serving
         # the UI: degrade to the browser-UI fallback. No-op on Windows/macOS
         # where the native backend starts normally.
         # The browser profile is persistent (see webview_storage_dir): the
-        # frontend's localStorage â€” surface, pane sizes, theme cache
-        # â€” must survive a restart, and pywebview's default private mode throws
+        # frontend's localStorage — surface, pane sizes, theme cache
+        # — must survive a restart, and pywebview's default private mode throws
         # it away with the process. Only when no directory can be written does
         # the shell fall back to that private mode, and says so.
         storage_dir = webview_storage_dir()
@@ -6481,7 +6481,7 @@ class DesktopApp:
             from loguru import logger as _profile_logger
 
             _profile_logger.warning(
-                "No writable directory for the WebView profile â€” the browser "
+                "No writable directory for the WebView profile — the browser "
                 "runs in private mode and the interface forgets its layout "
                 "on every restart."
             )
@@ -6507,12 +6507,12 @@ class DesktopApp:
         # webview.start returns once the window is destroyed. A real quit (the
         # X, tray "Quit", or a restart) has set ``_user_requested_quit``; in that
         # case tear every surface down AND guarantee the process dies, so nothing
-        # lingers â€” the user's "close = close EVERYTHING" mandate. The daemon
+        # lingers — the user's "close = close EVERYTHING" mandate. The daemon
         # timer is the backstop for a wedged teardown; the ``os._exit`` right
         # after ``shutdown()`` is the fast path for the common case (forensic
-        # 2026-06-27: a hung shutdown kept the old process â€” and its tray icon â€”
+        # 2026-06-27: a hung shutdown kept the old process — and its tray icon —
         # alive ~30 min). On a boot-failure exit ``_user_requested_quit`` is
-        # False â†’ normal return, so callers still get an exit code.
+        # False → normal return, so callers still get an exit code.
         if self._user_requested_quit:
             self._arm_force_exit(after_s=20.0)
             self._hand_off_to_background_service()
@@ -6545,7 +6545,7 @@ class DesktopApp:
         url = f"http://127.0.0.1:{self.cfg.ui.admin_api_port}"
         _logger.warning("Native desktop window unavailable: {}", exc)
         # The message below goes to stderr, which a windowless launch (pythonw,
-        # a shortcut, the tray) throws away â€” so the log has to carry the two
+        # a shortcut, the tray) throws away — so the log has to carry the two
         # facts on its own: where the UI still is, and which interpreter failed.
         _logger.warning(
             "Browser-UI fallback: UI stays reachable at {} (interpreter: {}).",
@@ -6588,16 +6588,16 @@ class DesktopApp:
                 while True:
                     time.sleep(3600)
         except KeyboardInterrupt:
-            _logger.info("Interrupted â€” shutting the browser-UI fallback down.")
+            _logger.info("Interrupted — shutting the browser-UI fallback down.")
         return self.shutdown() or 0
 
     @staticmethod
     def _native_window_icon() -> str | None:
-        """Icon path handed to ``webview.start(icon=...)`` â€” Linux/macOS only.
+        """Icon path handed to ``webview.start(icon=...)`` — Linux/macOS only.
 
-        The WM_CLASS â†” ``.desktop`` ``StartupWMClass`` handshake only feeds the
+        The WM_CLASS ↔ ``.desktop`` ``StartupWMClass`` handshake only feeds the
         dock/taskbar. The window's own TITLE BAR is drawn by the window manager
-        (xfwm4, Mutter, KWin, â€¦) from ``_NET_WM_ICON`` on the window itself; it
+        (xfwm4, Mutter, KWin, …) from ``_NET_WM_ICON`` on the window itself; it
         never consults a ``.desktop`` file. Without the ``icon=`` argument
         pywebview's GTK/Qt backend leaves that property unset and the title bar
         shows the WM's generic window glyph (forensic 2026-09-02, Linux VM).
@@ -6615,7 +6615,7 @@ class DesktopApp:
             from dodaios.assets import bundled_app_icon_png
 
             png = bundled_app_icon_png()
-        except Exception as exc:  # noqa: BLE001 â€” icon is cosmetic, never blocks the window
+        except Exception as exc:  # noqa: BLE001 — icon is cosmetic, never blocks the window
             from loguru import logger
 
             logger.debug("bundled PNG icon lookup failed: {}", exc)
@@ -6657,7 +6657,7 @@ class DesktopApp:
             # titlebar kept the pythonw.exe Python logo (forensic 2026-06-28).
             # Match by title OR by our own process id (the WebView2 host title is
             # applied late, so an exact-title FindWindowW alone is racy), and keep
-            # re-applying for a few seconds after the first success â€” WebView2
+            # re-applying for a few seconds after the first success — WebView2
             # re-assigns the process icon once its control finishes initialising,
             # so a single WM_SETICON does not stick.
             deadline = time.monotonic() + 30.0
@@ -6671,7 +6671,7 @@ class DesktopApp:
                         first_set_at = time.monotonic()
                         logger.debug("Taskbar icon set; re-arming against WebView2 override.")
                         # Late shortcut self-heal: the import-time ensure runs
-                        # before anything else â€” if the Start-Menu shortcut got
+                        # before anything else — if the Start-Menu shortcut got
                         # deleted after that (an uninstall/reinstall race, a
                         # cleanup tool), Windows search loses "Personal Jarvis"
                         # for the whole session. Re-ensure once now that the
@@ -6683,7 +6683,7 @@ class DesktopApp:
                             )
 
                             ensure_start_menu_shortcut()
-                        except Exception:  # noqa: BLE001 â€” never kill the poll
+                        except Exception:  # noqa: BLE001 — never kill the poll
                             logger.debug(
                                 "late Start-Menu shortcut re-ensure failed",
                                 exc_info=True,
@@ -6693,7 +6693,7 @@ class DesktopApp:
                 time.sleep(0.3)
             if first_set_at is None:
                 logger.warning(
-                    "Taskbar icon setter timeout â€” window '{}' not found.",
+                    "Taskbar icon setter timeout — window '{}' not found.",
                     WINDOW_TITLE,
                 )
 
@@ -6743,7 +6743,7 @@ class DesktopApp:
                     self._ensure_main_window()
                 elif action == "kill":
                     # Emergency stop (deep-dive 2026-07-15, C-02): this arm was
-                    # missing entirely â€” the advertised tray "Emergency stop"
+                    # missing entirely — the advertised tray "Emergency stop"
                     # was silently swallowed here. Publish KillRequested on the
                     # backend bus (the same bus the CU context's KillSwitch is
                     # bound to) from this non-async pystray bridge thread.
@@ -6771,7 +6771,7 @@ class DesktopApp:
         """Publish ``KillRequested(source="tray")`` from a non-async thread.
 
         Best-effort and never raises: during early boot the backend loop or
-        the server bus may not exist yet â€” then there is nothing running that
+        the server bus may not exist yet — then there is nothing running that
         could be stopped, and we log honestly instead of crashing the tray.
         """
         from loguru import logger
@@ -6780,7 +6780,7 @@ class DesktopApp:
         bus = getattr(self._server, "bus", None) if self._server is not None else None
         if loop is None or loop.is_closed() or bus is None:
             logger.warning(
-                "Emergency stop pressed, but the backend bus is not up yet â€” "
+                "Emergency stop pressed, but the backend bus is not up yet — "
                 "nothing is running that could be stopped."
             )
             return
@@ -6789,14 +6789,14 @@ class DesktopApp:
 
             asyncio.run_coroutine_threadsafe(bus.publish(KillRequested(source="tray")), loop)
             logger.info("Emergency stop: KillRequested(source=tray) published.")
-        except Exception:  # noqa: BLE001 â€” the tray must survive a failed kill
+        except Exception:  # noqa: BLE001 — the tray must survive a failed kill
             logger.opt(exception=True).warning("Emergency stop publish failed.")
 
     async def _on_show_window_requested(self, _event: object) -> None:
         """Bus subscriber for ``ShowWindowRequested`` (overlay right-click).
 
         Coroutine because ``EventBus._safe_dispatch`` does ``await handler(event)``
-        â€” a plain ``def`` would still run but trip ``await None`` â†’ a swallowed
+        — a plain ``def`` would still run but trip ``await None`` → a swallowed
         TypeError on every click. Raises the main desktop window.
 
         The whole show path runs in a worker thread: pywebview window calls
@@ -6834,7 +6834,7 @@ class DesktopApp:
         except Exception as exc:  # noqa: BLE001
             # The whole show-the-window path is in this try, so a failure here
             # is exactly the "clicked the tray icon and nothing happened"
-            # report â€” with no other trace anywhere.
+            # report — with no other trace anywhere.
             from loguru import logger
 
             logger.opt(exception=exc).warning("Showing the desktop window failed")
@@ -6846,14 +6846,14 @@ class DesktopApp:
         Background: pywebview keeps whatever HTTP body the WebView2
         rendered last. When the user hides the window for a while and
         the FastAPI server later recovers, ``show()`` only un-hides the
-        cached frame â€” including stale 4xx/5xx pages such as the bare
+        cached frame — including stale 4xx/5xx pages such as the bare
         ``Internal Server Error`` body. The SPA document always carries
         ``#root`` (from ``index.html``, before React even mounts); an error
         body never does, so its absence is what forces a fresh navigation.
 
         The probe used to look for "Jarvis" in ``document.title``, but the
         title has been the neutral "Assistant" since 2026-07-01, so EVERY
-        show â€” a tray click, the orb, a click on the appshot card â€” reloaded
+        show — a tray click, the orb, a click on the appshot card — reloaded
         a perfectly healthy window: the editor the card had just opened was
         wiped and a running voice call hung up.
         """
@@ -6927,7 +6927,7 @@ class DesktopApp:
         _mark_instance_quitting()
         backstop = getattr(self, "_webview_running", False)
         logger.info(
-            "Main window closed â€” quitting{}.",
+            "Main window closed — quitting{}.",
             f" (force-exit backstop in {self._CLOSE_QUIT_BACKSTOP_S:.0f} s)" if backstop else "",
         )
         if getattr(self, "_orb", None) is not None:
@@ -6947,7 +6947,7 @@ class DesktopApp:
         service (``dodaios.core.background_service``) waits for this process to
         exit, takes over the lock and keeps them running until the app opens
         again. A restart, a declined Terms gate or a failed backend set
-        ``_skip_background_handoff`` â€” those must not leave anything behind.
+        ``_skip_background_handoff`` — those must not leave anything behind.
         """
         if getattr(self, "_skip_background_handoff", False):
             return
@@ -6967,7 +6967,7 @@ class DesktopApp:
         try:
             # Prefer stop() when the surface has it (jarvis bar: unsubscribes
             # its level_tap sink + destroys the window). The mascot orb has no
-            # stop() â†’ fall back to hide().
+            # stop() → fall back to hide().
             stop = getattr(orb, "stop", None)
             if callable(stop):
                 stop()
@@ -6979,14 +6979,14 @@ class DesktopApp:
             pass
 
     def _suppress_overlay_for_hidden_window(self) -> None:
-        """Take a NON-persistent overlay bar off the screen on minimise â€” but
+        """Take a NON-persistent overlay bar off the screen on minimise — but
         NEVER touch a bar the user set to "show at all times".
 
         "Show at all times" (``bar_persistent``) makes the bar a standalone,
         always-on element by the user's explicit choice: minimising the main
         window to tray must leave it exactly where it is. Forcing an always-on
         bar into the hide-at-idle regime here was the regression where the bar
-        "vanishes after a while and only the wake word brings it back" â€” every
+        "vanishes after a while and only the wake word brings it back" — every
         tray-minimise silently overrode the user's always-on preference. A user
         who wants the bar gone turns "show at all times" OFF instead.
 
@@ -7058,7 +7058,7 @@ class DesktopApp:
         The mandate is that closing the window closes EVERYTHING. ``shutdown()``
         is bounded by per-step timeouts, but history shows a teardown can still
         hang (BUG-031 window-destroy; a pending asyncio task; a wedged native
-        transcribe â€” AP-24) and leave a windowless process holding the tray icon
+        transcribe — AP-24) and leave a windowless process holding the tray icon
         + admin port for minutes (forensic 2026-06-27). This timer guarantees
         death regardless. The normal path never reaches it: ``run_window_only``
         ``os._exit()``s the instant ``shutdown()`` returns, so this daemon dies
@@ -7177,8 +7177,8 @@ class DesktopApp:
                 time.monotonic() - quit_requested_at,
             )
 
-        # Hide the orb overlay first â€” the event path (pipeline â†’ supervisor
-        # â†’ bus â†’ OrbBridge) doesn't reliably reach the bridge anymore during a
+        # Hide the orb overlay first — the event path (pipeline → supervisor
+        # → bus → OrbBridge) doesn't reliably reach the bridge anymore during a
         # hard loop stop. A direct hide() guarantees the desktop icon
         # top-right disappears before the process terminates.
         self._stop_overlay()
@@ -7197,7 +7197,7 @@ class DesktopApp:
 
         # Virtual-mouse overlay down too (own Tk thread). Its shutdown blocks
         # up to ~5s on the Tk thread join + does a ShowWindow(SW_HIDE) Win32
-        # fallback if Tk is wedged â€” see TkVirtualCursor.shutdown for the
+        # fallback if Tk is wedged — see TkVirtualCursor.shutdown for the
         # 2026-05-26 black-screen incident context. We log on failure so the
         # next incident has a breadcrumb instead of silent EXC swallow.
         if self._virtual_cursor is not None:
@@ -7211,7 +7211,7 @@ class DesktopApp:
                 )
             self._virtual_cursor = None
 
-        # Jarvis system cursor â€” restore the OS arrow even if a Computer-Use
+        # Jarvis system cursor — restore the OS arrow even if a Computer-Use
         # session was mid-flight. Without this the user would log into the
         # next session with the Jarvis cursor stuck (atexit is a safety net,
         # not the primary path).
@@ -7237,14 +7237,14 @@ class DesktopApp:
         loop = self._backend_loop
         server = self._server
         if loop is not None and server is not None and loop.is_running():
-            # Cancel the pipeline task â€” otherwise HotkeyTrigger stays stuck in the loop
+            # Cancel the pipeline task — otherwise HotkeyTrigger stays stuck in the loop
             # and server.stop() never gets a turn.
             if self._pipeline_task is not None and not self._pipeline_task.done():
                 try:
                     loop.call_soon_threadsafe(self._pipeline_task.cancel)
                 except Exception as exc:  # noqa: BLE001
                     # If this cancel never lands, HotkeyTrigger stays in the loop
-                    # and server.stop() never gets a turn â€” the hung-shutdown
+                    # and server.stop() never gets a turn — the hung-shutdown
                     # shape that once kept a dead process on the port.
                     from loguru import logger as _logger
 
@@ -7254,7 +7254,7 @@ class DesktopApp:
             # ``await self._wake_model_loaded.wait()`` (the heavy-backend gate)
             # unblocks instead of sitting pending through shutdown. Left pending,
             # these log "Task was destroyed but it is pending" and can stall
-            # loop.stop â†’ the self-restart hangs and the old process keeps the
+            # loop.stop → the self-restart hangs and the old process keeps the
             # port (forensic 2026-06-27: PID 51240 hung ~30 min on shutdown).
             _wut = getattr(self, "_wake_upgrade_task", None)
             if _wut is not None and not _wut.done():
@@ -7280,7 +7280,7 @@ class DesktopApp:
                     from loguru import logger as _logger
 
                     _logger.warning("Wake-model gate release did not dispatch: {}", exc)
-            # Cleanly shut down the workflow scheduler + store â€” prevents
+            # Cleanly shut down the workflow scheduler + store — prevents
             # a cron tick from still triggering a run mid-shutdown.
             wf_scheduler = getattr(self, "_workflow_scheduler", None)
             wf_store = getattr(self, "_workflow_store", None)
@@ -7332,7 +7332,7 @@ class DesktopApp:
 
                 _logger.warning("Offload before quit did not finish: {}", exc)
 
-            # Cleanly close PTY sessions â€” otherwise zombies remain
+            # Cleanly close PTY sessions — otherwise zombies remain
             async def _pty_cleanup() -> None:
                 try:
                     srv = self._server
@@ -7377,7 +7377,7 @@ class DesktopApp:
         if self._backend_thread is not None:
             self._backend_thread.join(timeout=self._BACKEND_SHUTDOWN_WAIT_S)
 
-        # Tray last â€” pystray.stop() prevents the tray icon from lingering
+        # Tray last — pystray.stop() prevents the tray icon from lingering
         # in the taskbar after the process ends.
         if self._tray is not None:
             try:
@@ -7423,7 +7423,7 @@ def main() -> int:
         lock = acquire_single_instance_lock()
     except SingleInstanceError as exc:
         sys.stderr.write(f"{exc}\n")
-        # Bring the existing instance to the front â€” best-effort.
+        # Bring the existing instance to the front — best-effort.
         focus_existing_instance_robust()
         return 3
 

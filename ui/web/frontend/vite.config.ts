@@ -1,4 +1,4 @@
-﻿/// <reference types="vitest/config" />
+/// <reference types="vitest/config" />
 import fs from "node:fs";
 import { defineConfig } from "vite";
 import type { Plugin } from "vite";
@@ -71,8 +71,10 @@ function materialIconAssets(): Plugin {
 export default defineConfig({
   plugins: [safePublication(__dirname), react(), materialIconAssets(), missingNameGate(__dirname)],
   // The society's figures are binary glTF; Vite serves them as fingerprinted
-  // assets (docs/agent-society/character-pipeline.md Â§4.2).
+  // assets (docs/agent-society/character-pipeline.md §4.2).
   assetsInclude: ["**/*.glb"],
+  // JA: bundle somente ASCII, imune a leitura errada de encoding.
+  esbuild: { charset: "ascii" },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -97,7 +99,7 @@ export default defineConfig({
     emptyOutDir: true,
     // No source maps in production builds. They bloat the bundle, expose the
     // full original source, and bake the absolute build path (e.g. a personal
-    // C:\Users\... home dir) into the .map files â€” none of which belongs in the
+    // C:\Users\... home dir) into the .map files — none of which belongs in the
     // prebuilt dist shipped to the public repo. The Vite dev server keeps its
     // own inline maps, so local debugging is unaffected.
     sourcemap: false,

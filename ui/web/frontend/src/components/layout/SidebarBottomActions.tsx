@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Building2, RotateCw, X } from "lucide-react";
 
 import SidebarAgents from "@/components/layout/SidebarAgents";
@@ -50,7 +50,7 @@ export default function SidebarBottomActions() {
     } catch (error) {
       console.error("Erro ao reiniciar DodaiOS:", error);
       setRestarting(false);
-      window.alert("NÃ£o foi possÃ­vel reiniciar o DodaiOS.");
+      window.alert("Não foi possível reiniciar o DodaiOS.");
     }
   }
 
@@ -173,7 +173,7 @@ export default function SidebarBottomActions() {
             }`}
           />
 
-          <span className="truncate">ReinÃ­cio</span>
+          <span className="truncate">Reinício</span>
         </button>
       </div>
     </div>

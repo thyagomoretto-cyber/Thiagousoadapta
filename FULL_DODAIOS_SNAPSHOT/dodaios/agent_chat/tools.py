@@ -458,3 +458,68 @@ class _suppress_os:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         return exc_type is not None and issubclass(exc_type, (OSError, ProcessLookupError))
+
+
+# JA OPERATIONAL SELF HEALING
+_JA_ORIGINAL_EXECUTE_TOOL = execute_tool
+
+async def execute_tool(name: str, args: dict[str, Any], *, cwd: Path) -> tuple[str, bool]:
+
+    output, is_error = await _JA_ORIGINAL_EXECUTE_TOOL(
+        name,
+        args,
+        cwd=cwd,
+    )
+
+    if not is_error:
+        return output, False
+
+    try:
+        import json
+        import time
+
+        log_dir = Path.home() / ".dodaios" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        event = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "tool": str(name),
+            "arg_keys": sorted(str(k) for k in (args or {}).keys()),
+            "cwd": str(cwd),
+            "error": str(output)[:4000],
+        }
+
+        with (log_dir / "self_healing.jsonl").open(
+            "a",
+            encoding="utf-8"
+        ) as fh:
+            fh.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    except Exception:
+        pass
+
+    recovery = f"""
+[JA_OPERATIONAL_ERROR]
+
+A ferramenta {name!r} falhou.
+
+ERRO:
+{output}
+
+Nao encerre automaticamente a tarefa.
+
+Analise o erro.
+Descubra a causa.
+Inspecione configuracoes, arquivos, logs e dependencias.
+Pesquise documentacao ou web se necessario.
+Crie uma correcao.
+Faca backup quando apropriado.
+Aplique a correcao.
+Teste novamente.
+Continue o pedido original.
+
+Nao repita cegamente a mesma acao.
+Use nova hipotese se a primeira correcao falhar.
+""".strip()
+
+    return recovery, True

@@ -5854,7 +5854,7 @@ class DesktopApp:
             "min_size": (900, 600),
             "resizable": True,
             # Keep Cocoa's real close/minimize/zoom controls on every main window.
-            "frameless": sys.platform != "darwin",
+            "frameless": False,  # JA PERSISTENT: native Windows controls
             "easy_drag": False,
             "confirm_close": False,
             "background_color": self._window_background(),

@@ -71,16 +71,24 @@
     const catalog = await api("/api/agent-chat/catalog?surface=jarvis");
     const pick = catalog.selection || { provider: "local-openai", model: "", effort: "" };
     const session = await api("/api/agent-chat/sessions", { method: "POST", body: { provider: pick.provider, model: pick.model || "", effort: pick.effort || "", account_id: pick.account_id || "", surface: "jarvis", title: `Ensinar: ${skill.name}` } });
-    return session.id;
+    return session.session_id;
   }
 
-  const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
+  const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. Quando o caminho mudar conforme o caso, como um imovel comercial ou residencial, pergunte como identificar e registre a decisao. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / CONDICAO: se tal caso, entao fazer tal coisa / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
 
   async function sendTeach(text) {
     const teach = state.teach;
     teach.log.push({ who: "Você", text });
     teach.busy = true;
     render();
+    try {
+      await runTeachTurn(teach, text);
+    } finally {
+      teach.busy = false;
+    }
+  }
+
+  async function runTeachTurn(teach, text) {
     const skill = state.skill;
     const first = !teach.session;
     if (first) teach.session = await startSession(skill);
@@ -101,13 +109,15 @@
         const reply = events.filter((event) => event.kind === "assistant_text" && ours(event)).map((event) => event.payload.text).join("\n");
         teach.log.push({ who: "Ele", text: reply || "Terminou sem resposta." });
         reply.split("\n").forEach((line) => {
-          const found = line.match(/^\W*(PASSO|REGRA|EXCECAO|VALIDAR|EXEMPLO):\s*(.+)$/);
+          const found = line.match(/^\W*(PASSO|REGRA|CONDICAO|EXCECAO|VALIDAR|EXEMPLO):\s*(.+)$/);
           if (found) teach.learned.push({ kind: found[1], text: found[2].trim() });
         });
-        break;
+        // Registra a cada passo, para nada se perder se o ensino parar no meio.
+        if (teach.learned.length) await saveLearned();
+        return;
       }
     }
-    teach.busy = false;
+    throw new Error("Ele demorou demais para responder. Veja o chat do ensino.");
   }
 
   async function saveLearned() {
@@ -116,16 +126,16 @@
     const pick = (kind) => learned.filter((item) => item.kind === kind).map((item) => item.text);
     const merge = (old, kind) => [...new Set([...old, ...pick(kind)])];
     let updated = await api(skillsUrl(`/${skill.id}`), { method: "PATCH", body: {
-      steps: merge(skill.steps, "PASSO"), rules: merge(skill.rules, "REGRA"), exceptions: merge(skill.exceptions, "EXCECAO"),
+      steps: merge(skill.steps, "PASSO"), rules: merge(skill.rules, "REGRA"), conditions: merge(skill.conditions || [], "CONDICAO"), exceptions: merge(skill.exceptions, "EXCECAO"),
       validation: merge(skill.validation, "VALIDAR"), note: "Aprendido no modo ensino",
     } });
     for (const text of pick("EXEMPLO")) {
       const [situation, outcome] = text.split("=>").map((part) => part.trim());
       updated = await api(skillsUrl(`/${skill.id}/examples`), { method: "POST", body: { situation, outcome: outcome || "" } });
     }
+    state.teach.saved.push(...learned);
     state.teach.learned = [];
     await saved(updated);
-    state.notice = "Aprendizado salvo na habilidade.";
   }
 
   async function record(field, control) {
@@ -256,6 +266,7 @@
     const teach = state.teach;
     teach.live = true;
     teach.audio = new AudioContext();
+    try {
     while (state.teach === teach && teach.live) {
       setStatus(teach, "Ouvindo. Fale o próximo passo, ou diga terminar.");
       const audio = await listen(teach);
@@ -264,9 +275,8 @@
       const text = (await transcribe(audio)).trim();
       if (!text) continue;
       if (FINISH_WORDS.test(text)) {
-        teach.live = false;
         teach.log.push({ who: "Você", text });
-        if (teach.learned.length) await saveLearned();
+        state.notice = "Ensino encerrado. Tudo já está registrado na habilidade.";
         break;
       }
       setStatus(teach, "Executando...");
@@ -277,10 +287,12 @@
         await speak(last.text);
       }
     }
-    teach.live = false;
-    teach.status = "";
-    if (teach.stopListening) teach.stopListening();
-    await teach.audio.close();
+    } finally {
+      teach.live = false;
+      teach.status = "";
+      if (teach.stopListening) teach.stopListening();
+      await teach.audio.close();
+    }
   }
 
   function stopTeachByVoice() {
@@ -304,7 +316,7 @@
       el("div", { textContent: entry.who, style: { fontSize: "11px", color: colors.muted } }),
       el("div", { textContent: entry.text, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
     ]);
-    const learned = teach.learned.map((item) => el("div", { textContent: `${item.kind}: ${item.text}`, style: { marginTop: "4px", fontSize: "12px" } }));
+    const learned = teach.saved.map((item) => el("div", { textContent: `${item.kind}: ${item.text}`, style: { marginTop: "4px", fontSize: "12px" } }));
     const voice = teach.live
       ? button("Parar de ouvir", stopTeachByVoice, true)
       : button("Ensinar por voz", () => guarded(teachByVoice), true);
@@ -312,7 +324,7 @@
       el("p", { textContent: teach.status || "Fale normalmente. Ele executa cada passo, responde e volta a ouvir até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
       ...(teach.live ? [meter()] : []),
       ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
-      ...(learned.length ? [title("Aprendeu nesta conversa"), ...learned, row([button("Salvar aprendizado", () => guarded(saveLearned), true)])] : [])];
+      ...(learned.length ? [title("Já registrado nesta conversa"), ...learned] : [])];
   }
 
   // O app do Mac nao mostra window.prompt nem window.confirm, entao pergunta aqui.
@@ -400,13 +412,14 @@
     const form = {
       name: input(skill.name, "name"), whenToUse: area(skill.whenToUse, "whenToUse"),
       steps: area(skill.steps.join("\n"), "steps", 6), rules: area(skill.rules.join("\n"), "rules", 4),
+      conditions: area((skill.conditions || []).join("\n"), "conditions"),
       exceptions: area(skill.exceptions.join("\n"), "exceptions"), validation: area(skill.validation.join("\n"), "validation"),
       managerId: memberSelect(skill.managerId, "managerId", (member) => member.kind === "gerente"),
       specialistId: memberSelect(skill.specialistId, "specialistId", (member) => member.kind !== "gerente"),
     };
     const save = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}`), { method: "PATCH", body: {
       name: form.name.value, whenToUse: form.whenToUse.value, managerId: form.managerId.value, specialistId: form.specialistId.value,
-      steps: lines(form.steps), rules: lines(form.rules), exceptions: lines(form.exceptions), validation: lines(form.validation),
+      steps: lines(form.steps), rules: lines(form.rules), conditions: lines(form.conditions), exceptions: lines(form.exceptions), validation: lines(form.validation),
     } })));
     const exampleText = area("", "situation"); const exampleResult = area("", "outcome", 2);
     const addExample = () => guarded(async () => saved(await api(skillsUrl(`/${skill.id}/examples`), { method: "POST", body: { situation: exampleText.value, outcome: exampleResult.value } })));
@@ -432,11 +445,11 @@
       if (await dispatch(false)) state.notice = "Teste enviado. Acompanhe em Tarefas e missões.";
     });
     const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
-    const teach = () => { state.teach = { session: null, log: [], learned: [], busy: false }; render(); };
+    const teach = () => { state.teach = { session: null, log: [], learned: [], saved: [], busy: false }; render(); };
     return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Ensinar conversando", teach, true), button("Testar habilidade", test)]),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
       label("Nome"), form.name, label("Quando usar"), form.whenToUse, label("Passos, um por linha"), form.steps,
-      label("Regras, uma por linha"), form.rules, label("Exceções, uma por linha"), form.exceptions, label("Como validar, um por linha"), form.validation,
+      label("Regras, uma por linha"), form.rules, label("Decisões conforme o caso, uma por linha"), form.conditions, label("Exceções, uma por linha"), form.exceptions, label("Como validar, um por linha"), form.validation,
       label("Gerente responsável"), form.managerId, label("Funcionário especialista"), form.specialistId, row([button("Salvar", save, true)]),
       title("Adicionar exemplo"), label("Situação"), exampleText, label("Resultado esperado"), exampleResult, row([button("Adicionar exemplo", addExample)]),
       ...skill.examples.slice(-5).reverse().map((item) => el("div", { textContent: `• ${item.situation}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })),

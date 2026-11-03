@@ -29,6 +29,7 @@ class SkillFields(BaseModel):
     platform: str | None = Field(default=None, max_length=40)
     steps: list[str] | None = Field(default=None, max_length=_MAX_LIST)
     rules: list[str] | None = Field(default=None, max_length=_MAX_LIST)
+    conditions: list[str] | None = Field(default=None, max_length=_MAX_LIST)
     exceptions: list[str] | None = Field(default=None, max_length=_MAX_LIST)
     validation: list[str] | None = Field(default=None, max_length=_MAX_LIST)
     note: str = Field(default="", max_length=240)

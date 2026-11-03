@@ -27,7 +27,7 @@ _MIN_MATCH_SCORE: Final[int] = 3
 _SYNC_INTERVAL_S: Final[float] = 30.0
 _last_sync = 0.0
 _NAME_WEIGHT: Final[int] = 3
-_LIST_FIELDS: Final[tuple[str, ...]] = ("steps", "rules", "exceptions", "validation")
+_LIST_FIELDS: Final[tuple[str, ...]] = ("steps", "rules", "conditions", "exceptions", "validation")
 _TEXT_FIELDS: Final[tuple[str, ...]] = (
     "name", "category", "whenToUse", "procedure", "managerId", "specialistId", "platform",
 )
@@ -213,6 +213,7 @@ def create_skill(company_id: str, company_name: str, data: dict[str, Any]) -> di
         "platform": "todas",
         "steps": [],
         "rules": [],
+        "conditions": [],
         "exceptions": [],
         "validation": [],
         "examples": [],
@@ -332,6 +333,7 @@ def skill_prompt(skills: list[dict[str, Any]]) -> str:
         if skill.get("procedure"):
             lines.append(f"Procedimento: {skill['procedure']}")
         lines += [f"{n}. {step}" for n, step in enumerate(skill.get("steps", []), 1)]
+        lines += [f"Decisao conforme o caso: {item}" for item in skill.get("conditions", [])]
         lines += [f"Regra: {rule}" for rule in skill.get("rules", [])]
         lines += [f"Excecao: {item}" for item in skill.get("exceptions", [])]
         lines += [
@@ -343,8 +345,10 @@ def skill_prompt(skills: list[dict[str, Any]]) -> str:
     if not blocks:
         return ""
     head = (
-        "HABILIDADES APRENDIDAS. Siga o procedimento ensinado, prefira localizar "
-        "elementos por texto e estrutura da tela e valide o resultado no final."
+        "HABILIDADES APRENDIDAS. Antes de executar, identifique qual caso se aplica "
+        "e qual decisao ele exige; se nao der para saber, pergunte. Siga o procedimento "
+        "ensinado, prefira localizar elementos por texto e estrutura da tela e valide "
+        "o resultado no final."
     )
     return head + "\n\n" + "\n\n".join(blocks)
 

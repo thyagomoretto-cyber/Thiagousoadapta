@@ -93,6 +93,12 @@ def patch_company_skill(company_id: str, skill_id: str, body: SkillFields) -> di
     return _guarded(store.update_skill, company_id, skill_id, body.model_dump(exclude={"note"}), body.note)
 
 
+@router.delete("/{skill_id}")
+def delete_company_skill(company_id: str, skill_id: str) -> dict:
+    _company_name(company_id)
+    return {"backup": _guarded(store.delete_skill, company_id, skill_id)}
+
+
 @router.post("/{skill_id}/examples", status_code=201)
 def add_skill_example(company_id: str, skill_id: str, body: Example) -> dict:
     _company_name(company_id)

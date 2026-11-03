@@ -137,11 +137,12 @@
       return;
     }
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const context = new AudioContext({ sampleRate: 16000 });
+    const context = new AudioContext();
+    await context.resume();
     const source = context.createMediaStreamSource(stream);
     const node = context.createScriptProcessor(4096, 1, 1);
     const pieces = [];
-    node.onaudioprocess = (event) => pieces.push(Int16Array.from(event.inputBuffer.getChannelData(0), (v) => Math.max(-1, Math.min(1, v)) * 32767));
+    node.onaudioprocess = (event) => pieces.push(toSixteenK(event.inputBuffer.getChannelData(0), context.sampleRate));
     source.connect(node);
     node.connect(context.destination);
     control.textContent = "Parar";
@@ -168,12 +169,24 @@
   const FINISH_WORDS = /^\W*(terminar|encerrar|finalizar|pode parar)\b/i;
 
   // Ouve uma fala inteira: comeca na voz e termina no silencio.
+  function toSixteenK(samples, rate) {
+    const step = rate / 16000;
+    const output = new Int16Array(Math.floor(samples.length / step));
+    for (let index = 0; index < output.length; index += 1) {
+      output[index] = Math.max(-1, Math.min(1, samples[Math.floor(index * step)])) * 32767;
+    }
+    return output;
+  }
+
+  // O WebKit so libera o audio pelo clique, entao o contexto nasce la e fica vivo.
   async function listen(teach) {
+    const context = teach.audio;
+    await context.resume();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const context = new AudioContext({ sampleRate: 16000 });
     const source = context.createMediaStreamSource(stream);
     const node = context.createScriptProcessor(4096, 1, 1);
     const pieces = [];
+    let lastMeter = 0;
     let spoke = false;
     let silent = 0;
     const heard = await new Promise((finish) => {
@@ -181,10 +194,16 @@
       node.onaudioprocess = (event) => {
         const samples = event.inputBuffer.getChannelData(0);
         const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
-        const seconds = samples.length / 16000;
+        const seconds = samples.length / context.sampleRate;
         if (level > SPEECH_LEVEL) { spoke = true; silent = 0; } else silent += seconds;
+        const now = Date.now();
+        if (now - lastMeter > 500) {
+          lastMeter = now;
+          const meter = document.querySelector("[data-aprender-nivel]");
+          if (meter) meter.textContent = `Microfone: ${Math.round(Math.min(1, level * 20) * 100)}%`;
+        }
         if (!spoke) return;
-        pieces.push(Int16Array.from(samples, (value) => Math.max(-1, Math.min(1, value)) * 32767));
+        pieces.push(toSixteenK(samples, context.sampleRate));
         if (silent >= END_SILENCE_S || pieces.length * seconds >= MAX_SPEECH_S) finish(true);
       };
       source.connect(node);
@@ -194,7 +213,6 @@
     node.disconnect();
     source.disconnect();
     stream.getTracks().forEach((track) => track.stop());
-    await context.close();
     if (!heard) return null;
     const audio = new Int16Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
     let at = 0;
@@ -223,6 +241,12 @@
     });
   }
 
+  function meter() {
+    const node = el("div", { textContent: "Microfone: 0%", style: { fontSize: "12px", color: colors.muted } });
+    node.dataset.aprenderNivel = "1";
+    return node;
+  }
+
   function setStatus(teach, text) {
     teach.status = text;
     render();
@@ -231,6 +255,7 @@
   async function teachByVoice() {
     const teach = state.teach;
     teach.live = true;
+    teach.audio = new AudioContext();
     while (state.teach === teach && teach.live) {
       setStatus(teach, "Ouvindo. Fale o próximo passo, ou diga terminar.");
       const audio = await listen(teach);
@@ -255,6 +280,7 @@
     teach.live = false;
     teach.status = "";
     if (teach.stopListening) teach.stopListening();
+    await teach.audio.close();
   }
 
   function stopTeachByVoice() {
@@ -284,6 +310,7 @@
       : button("Ensinar por voz", () => guarded(teachByVoice), true);
     return [row([button("← Sair do ensino", () => { if (teach.live) stopTeachByVoice(); state.teach = null; render(); }), voice]),
       el("p", { textContent: teach.status || "Fale normalmente. Ele executa cada passo, responde e volta a ouvir até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
+      ...(teach.live ? [meter()] : []),
       ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
       ...(learned.length ? [title("Aprendeu nesta conversa"), ...learned, row([button("Salvar aprendizado", () => guarded(saveLearned), true)])] : [])];
   }
@@ -338,7 +365,7 @@
     answer.addEventListener("keydown", (event) => { if (event.key === "Enter") finish(); });
     setTimeout(() => answer.focus(), 0);
     return [label(asking.question), ...(asking.hasText ? [answer] : []),
-      row([button(asking.hasText ? "Continuar" : "Autorizar", finish, true), button("Cancelar", () => { state.asking = null; render(); })])];
+      row([button(asking.hasText ? "Continuar" : "Confirmar", finish, true), button("Cancelar", () => { state.asking = null; render(); })])];
   }
 
   function createSkill() {
@@ -349,12 +376,20 @@
     const company = el("select", { value: state.companyId || "", style: fieldStyle, onchange: (event) => guarded(() => loadCompany(event.target.value)) },
       state.companies.map((item) => el("option", { value: item.id, textContent: item.name })));
     company.value = state.companyId || "";
-    const items = state.skills.map((skill) => el("button", {
-      type: "button", onclick: () => { state.skill = skill; render(); },
-      style: { display: "block", width: "100%", textAlign: "left", padding: "10px 12px", marginTop: "8px", borderRadius: "10px", border: `1px solid ${colors.line}`, background: colors.card, color: colors.text, font: "inherit", cursor: "pointer" },
-    }, [
-      el("div", { textContent: skill.name, style: { fontSize: "13px", fontWeight: "600" } }),
-      el("div", { textContent: `${skill.examples.length} de 10 exemplos · ${skill.rules.length} regras · versão ${skill.version}`, style: { marginTop: "3px", fontSize: "12px", color: colors.muted } }),
+    const removeSkill = (skill) => ask(`Apagar a habilidade "${skill.name}"? Uma cópia será guardada.`, async () => {
+      await api(skillsUrl(`/${skill.id}`), { method: "DELETE", body: {} });
+      state.skills = (await api(skillsUrl())).skills;
+      state.notice = `Habilidade ${skill.name} apagada.`;
+    }, false);
+    const items = state.skills.map((skill) => el("div", { style: { display: "flex", gap: "8px", alignItems: "stretch", marginTop: "8px" } }, [
+      el("button", {
+        type: "button", onclick: () => { state.skill = skill; render(); },
+        style: { flex: "1", minWidth: "0", textAlign: "left", padding: "10px 12px", borderRadius: "10px", border: `1px solid ${colors.line}`, background: colors.card, color: colors.text, font: "inherit", cursor: "pointer" },
+      }, [
+        el("div", { textContent: skill.name, style: { fontSize: "13px", fontWeight: "600" } }),
+        el("div", { textContent: `${skill.examples.length} de 10 exemplos · ${skill.rules.length} regras · versão ${skill.version}`, style: { marginTop: "3px", fontSize: "12px", color: colors.muted } }),
+      ]),
+      button("Apagar", () => removeSkill(skill)),
     ]));
     return [label("Empresa"), company, row([button("Adicionar empresa", addCompany), ...(state.companyId ? [button("Apagar empresa", removeCompany)] : [])]),
       ...(state.companyId ? [row([button("Criar nova habilidade", createSkill, true)])] : []), title("Habilidades ensinadas"),

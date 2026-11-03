@@ -249,6 +249,19 @@ def update_skill(company_id: str, skill_id: str, changes: dict[str, Any], note: 
         return skill
 
 
+def delete_skill(company_id: str, skill_id: str) -> str:
+    """Tira a habilidade do uso e guarda uma copia; devolve o nome da copia."""
+    with _LOCK:
+        path = _path(company_id, skill_id)
+        skill = _read(path)
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        name = f"{path.parent.name}-{skill_id}-{stamp}.json"
+        _write(_root().parent / "company_backups" / name, skill)
+        path.unlink()
+        (_shared_root() / path.parent.name / path.name).unlink(missing_ok=True)
+    return name
+
+
 def add_example(company_id: str, skill_id: str, example: dict[str, Any]) -> dict[str, Any]:
     situation = str(example.get("situation") or "").strip()
     if not situation:

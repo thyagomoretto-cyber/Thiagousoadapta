@@ -768,6 +768,32 @@ def _build_provider(tts_cfg: Any, provider: str) -> Any:
             speed=tts_cfg.speed,
         )
 
+    if provider in ("kokoro-local", "kokoro", "kokoro-mlx"):
+        try:
+            from dodaios.plugins.tts.kokoro_local import KokoroLocalTTS
+        except ImportError as exc:
+            raise RuntimeError(
+                f"TTS provider 'kokoro-local' configured, but the plugin "
+                f"is not importable: {exc}."
+            ) from exc
+
+        extras = getattr(tts_cfg, "model_extra", None) or {}
+        kk = extras.get("kokoro") if isinstance(extras, dict) else None
+        kk = kk if isinstance(kk, dict) else {}
+
+        voice = (
+            kk.get("voice")
+            or getattr(tts_cfg, "voice", None)
+            or "pm_santa"
+        )
+
+        return KokoroLocalTTS(
+            voice=voice,
+            speed=float(kk.get("speed", getattr(tts_cfg, "speed", 1.0))),
+            language=kk.get("language", "pt"),
+            sample_rate=int(kk.get("sample_rate", 24000)),
+        )
+
     if provider in ("piper-local", "piper"):
         try:
             from dodaios.plugins.tts.piper_local import PiperLocalTTS

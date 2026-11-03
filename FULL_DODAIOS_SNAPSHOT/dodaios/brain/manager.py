@@ -398,7 +398,7 @@ TIER_DEFAULTS_BY_PROVIDER: dict[str, dict[str, str]] = {
         # Llama 3.3 70B (dense, late 2024) to NVIDIA's own current sparse
         # generation — 12B of 120B activate per token, so it answers faster than
         # the dense model it replaces. Verified against integrate.api.nvidia.com.
-        "nvidia": "nvidia/nemotron-3-super-120b-a12b",
+        "nvidia": "nvidia/nemotron-3.5-super-vl-120b-a12b",
         "mistral": "mistral-small-3.1",
         # Local providers: no server-side catalog is knowable ahead of time —
         # empty means "the plugin discovers the first installed model".

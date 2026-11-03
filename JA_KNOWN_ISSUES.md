@@ -20,6 +20,8 @@ Correções incluídas no código e em `JA-Atualizacao/`. Ainda precisam ser val
 | 18. Hotkeys | Dependência adicionada |
 | 21. Reinício | `ja_update_auth.py` adicionado e rota do macOS isolada |
 
+Do Mac foram incorporados: TTS `kokoro-local` e modelo NVIDIA `nemotron-3.5-super-vl-120b-a12b`. O `kokoro-local` precisa de `kokoro-mlx` no macOS arm64, instalado à parte por enquanto.
+
 O `dist` deste repositório só recebeu o reparo do regex. A nova tela de usuário entra no próximo build.
 
 ## Prioridade atual

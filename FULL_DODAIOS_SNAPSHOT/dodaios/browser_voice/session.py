@@ -61,6 +61,9 @@ SendJson = Callable[[dict[str, Any]], Awaitable[None]]
 # browser acknowledges completion so the session does not reopen the endpoint
 # detector while its own voice is still audible through the microphone.
 _BROWSER_TTS_ACK_TIMEOUT_S = 120.0
+# Audio sent ahead of playback. One Kokoro part is up to about 7 s, so the
+# browser never holds more than its ten-second limit.
+_MAX_AUDIO_AHEAD_S = 2.0
 
 
 class BrowserVoiceSession:
@@ -110,7 +113,11 @@ class BrowserVoiceSession:
         self._bus = bus
 
         self._in_resampler = Resampler(self.browser_sample_rate, STT_SAMPLE_RATE)
-        self._endpointer = EnergyEndpointer(sample_rate=STT_SAMPLE_RATE)
+        # 800 ms lets a natural pause inside a sentence pass (500 ms cut the owner
+        # mid-sentence), and 30 s lets a long request finish.
+        self._endpointer = EnergyEndpointer(
+            sample_rate=STT_SAMPLE_RATE, silence_ms=800, max_utterance_ms=30_000
+        )
 
         self._started_at = time.time()
         self._turns = 0
@@ -374,6 +381,8 @@ class BrowserVoiceSession:
 
         self._speaking = True
         sent = 0
+        audio_s = 0.0
+        playback_started: float | None = None
         try:
             stream = self._tts.synthesize(text, language_code=self.language_code)
             iterator = stream.__aiter__()
@@ -419,6 +428,15 @@ class BrowserVoiceSession:
                 )
                 await self._send_binary(pcm)
                 sent += 1
+                # The browser keeps only ten seconds of audio and drops the oldest
+                # beyond that. Local voices render faster than they play, so a long
+                # reply lost its middle without this pacing.
+                audio_s += len(pcm) / 2 / TTS_SAMPLE_RATE
+                now = time.monotonic()
+                playback_started = now if playback_started is None else playback_started
+                ahead = audio_s - (now - playback_started)
+                if ahead > _MAX_AUDIO_AHEAD_S:
+                    await asyncio.sleep(ahead - _MAX_AUDIO_AHEAD_S)
 
             if sent == 0:
                 log.warning(

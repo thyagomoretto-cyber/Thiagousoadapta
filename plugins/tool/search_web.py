@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from typing import Any, Final
 
 from dodaios.core.protocols import ExecutionContext, ToolResult
@@ -355,6 +356,15 @@ class SearchWebTool:
     }
 
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+        from dodaios.speech.local_voice import record_timing
+
+        started = time.monotonic()
+        try:
+            return await self._search(args, ctx)
+        finally:
+            record_timing("search", ms=round((time.monotonic() - started) * 1000))
+
+    async def _search(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         query = (args.get("query") or "").strip()
         max_results = int(args.get("max_results", 5))
         # Query variants (2026-07-17, BUG-072 follow-up): a research question

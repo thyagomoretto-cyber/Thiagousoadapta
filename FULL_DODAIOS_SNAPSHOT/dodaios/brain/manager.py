@@ -13557,6 +13557,10 @@ async def _settle_context_window(brain: Any) -> None:
 #: small enough for this to matter — see ``_fit_tools_to_context_window``.
 _CONTEXT_FIT_RESERVE_TOKENS = 4096
 
+#: Largest share of a context window the tool definitions may take, so a turn
+#: keeps room for its tool results and the answer.
+_TOOL_WINDOW_SHARE = 0.4
+
 #: A declared window at or below this is a small model: it is shown a short
 #: list of tools even when a longer one would fit (see ``_shortlist_tools``).
 _SMALL_WINDOW_TOKENS = 32_768
@@ -13625,10 +13629,18 @@ def _fit_tools_to_context_window(
     """
     if (context_window <= 0 and max_tools <= 0) or not tools:
         return tools, []
+    # Tools fill the space left over at the start of a turn, so without a share
+    # of their own the first tool result already overflows a local window.
+    budget_tokens = None
+    if context_window > 0:
+        budget_tokens = min(
+            max(context_window - used_tokens, 0),
+            int(context_window * _TOOL_WINDOW_SHARE),
+        )
     plan = plan_surface(
         tools,
         keep=keep,
-        budget_tokens=max(context_window - used_tokens, 0) if context_window > 0 else None,
+        budget_tokens=budget_tokens,
         max_direct=max(max_tools, 0),
     )
     if not plan.deferred:

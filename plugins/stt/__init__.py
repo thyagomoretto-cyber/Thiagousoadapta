@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import sys
 import time
 from collections.abc import Iterable
 from functools import lru_cache
+from importlib import import_module
 from importlib import metadata as importlib_metadata
+from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
 
@@ -235,6 +238,22 @@ def _resolve_keyed_stt_provider(primary_name: str, *, quiet: bool = False) -> st
     return primary_name
 
 
+#: Module and class for shipped providers that may be missing from stale metadata.
+_SHIPPED_PROVIDER_CLASSES: dict[str, tuple[str, str]] = {
+    "mlx-whisper": ("dodaios.plugins.stt.mlx_whisper_local", "MlxWhisperSTT"),
+}
+
+
+@lru_cache(maxsize=1)
+def mlx_stt_unavailable_reason() -> str:
+    """Why MLX Whisper cannot run on this machine, or ``""``. Cheap: read on every poll."""
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return "mlx-whisper runs only on macOS with Apple Silicon"
+    if find_spec("mlx_whisper") is None:
+        return "mlx-whisper is not installed in this Python"
+    return ""
+
+
 def local_stt_unavailable_reason() -> str:
     """Why the on-device recognizer cannot run *in this interpreter*, or ``""``.
 
@@ -294,6 +313,9 @@ def _resolve_effective_stt(provider_name: str) -> tuple[str, str]:
         if not alternatives:
             return name, ""
         return alternatives[0], reason
+    if name == "mlx-whisper":
+        reason = mlx_stt_unavailable_reason()
+        return (name, "") if not reason else ("faster-whisper", reason)
     # Open-source AP-22: when the configured cloud STT has no usable key, cross
     # to a cloud STT family the user DOES have a key for BEFORE dropping to local
     # faster-whisper (which is not installed on a base/headless host). The
@@ -327,7 +349,7 @@ _ON_DEVICE_ATTR = "runs_on_device"
 #: so it is asked only for our OWN plugins (whose behaviour we know without
 #: importing them) and never used to judge a stranger's.
 _SHIPPED_ON_DEVICE_PROVIDERS: frozenset[str] = frozenset(
-    {"faster-whisper", "nemotron-local"}
+    {"faster-whisper", "nemotron-local", "mlx-whisper"}
 )
 
 
@@ -488,6 +510,15 @@ def _load_provider_class(name: str) -> type | None:
                     "STT entry-point {!r} failed to load: {}", name, exc
                 )
                 return None
+    # Providers shipped in this tree. An editable install or an in-place update
+    # keeps old entry-point metadata, and a new engine must still resolve there.
+    target = _SHIPPED_PROVIDER_CLASSES.get(name)
+    if target is not None:
+        module_name, class_name = target
+        try:
+            return getattr(import_module(module_name), class_name)
+        except (ImportError, AttributeError) as exc:
+            logger.warning("STT provider {!r} failed to load: {}", name, exc)
     return None
 
 
@@ -612,8 +643,10 @@ def build_stt_from_config(stt_cfg: Any, *, dictionary_bias: bool = True) -> Any:
             # decoding, and offering it only earns the misleading "this plugin
             # is out of date" warning from the TypeError retry below. A model
             # PIN is not stripped — that is an explicit per-provider choice.
+            keeps_prompt = getattr(cls, "accepts_bias_prompt", False)
             for cloud_only in ("prompt", "timeout_s", "temperature"):
-                kwargs.pop(cloud_only, None)
+                if not (cloud_only == "prompt" and keeps_prompt):
+                    kwargs.pop(cloud_only, None)
         if not _stt_has_credential(provider_name, kwargs):
             logger.warning(
                 "STT provider {!r} has no usable credential; falling back to the "

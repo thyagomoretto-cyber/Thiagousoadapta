@@ -206,8 +206,9 @@ def build_override(
     reasoning_effort: ReasoningEffort | None = (
         effort if effort in _EFFORTS else None  # type: ignore[assignment]
     )
-    if reasoning_effort is None and provider == "local-openai":
-        # JA: sem raciocinio por padrao; o modelo local responde bem mais rapido.
+    if reasoning_effort in (None, "medium") and provider == "local-openai":
+        # JA: "Medio" e o padrao do seletor; so Alto liga o raciocinio, que custa
+        # dezenas de segundos no modelo local.
         reasoning_effort = "none"
     return TurnOverride(
         provider=provider,

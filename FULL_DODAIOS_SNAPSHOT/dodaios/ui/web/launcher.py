@@ -626,6 +626,9 @@ async def _run_headless(args) -> int:
     _lx_mark("imports")
 
     server = WebServer(cfg)
+    from dodaios.speech.local_voice import warm_local_voice
+
+    warm_local_voice(cfg)
     _lx_mark("webserver_ctor")
 
     # Attach core state to the app + MessageSent subscriber — identical to the

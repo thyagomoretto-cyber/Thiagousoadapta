@@ -35,7 +35,7 @@ import itertools
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 import httpx
@@ -58,7 +58,9 @@ __all__ = [
     "recommended_window",
     "refusal_error",
     "remember_window",
+    "fit_to_window",
     "reported_prompt_tokens",
+    "request_parts",
     "reset_registry",
     "truncation_suspected",
 ]
@@ -100,6 +102,17 @@ _SUSPICIONS_NEEDED: Final[int] = 2
 _WINDOW_STEPS: Final[tuple[int, ...]] = (8_192, 16_384, 32_768, 65_536, 131_072, 262_144)
 #: Headroom on top of the prompt for the answer and the next tool round.
 _RECOMMEND_HEADROOM: Final[float] = 1.25
+#: Share of the window a shortened request may fill, leaving room for the reply.
+_FIT_SHARE: Final[float] = 0.85
+#: What stays of an old tool result when a conversation is shortened.
+_TOOL_RESULT_KEEP_CHARS: Final[int] = 800
+#: Longest description a tool keeps in a request that does not fit.
+_TOOL_TEXT_KEEP_CHARS: Final[int] = 200
+#: Share of the limit the system prompt may keep in such a request.
+_SYSTEM_SHARE: Final[float] = 0.4
+#: Tools that always stay, so the assistant can still act.
+_MIN_TOOLS: Final[int] = 12
+_SHORTENED_NOTE: Final[str] = "\n[resultado antigo encurtado para caber no contexto]"
 
 #: How long a server's answer about its own window is trusted. Short, because
 #: the fix for a too-small window is to reload the model and ask again.
@@ -289,6 +302,85 @@ def fix_hint(kind: str, needed_tokens: int, *, ceiling: int | None = None) -> st
         )
     template = _FIX_HINTS.get(kind) or _FIX_HINTS["unknown"]
     return template.format(tokens=wanted)
+
+
+def fit_to_window(req: Any, window_tokens: int) -> Any:
+    """Shorten what a long conversation carries so ``req`` fits the window.
+
+    Old tool results go first, then the oldest turns. The last user turn and
+    the pairing of tool calls with their results always stay intact, so the
+    server receives a valid conversation and the turn runs instead of failing.
+    """
+    limit = int(window_tokens * _FIT_SHARE)
+    if window_tokens <= 0 or _budget_tokens(req) <= limit:
+        return req
+
+    def fits(messages: list[Any]) -> bool:
+        return _budget_tokens(replace(req, messages=tuple(messages))) <= limit
+
+    messages = list(req.messages)
+    oversized = [
+        index
+        for index, message in enumerate(messages)
+        if message.role == "tool"
+        and isinstance(message.content, str)
+        and len(message.content) > _TOOL_RESULT_KEEP_CHARS
+    ]
+    for index in oversized:
+        message = messages[index]
+        messages[index] = replace(
+            message, content=message.content[:_TOOL_RESULT_KEEP_CHARS] + _SHORTENED_NOTE
+        )
+        if fits(messages):
+            return replace(req, messages=tuple(messages))
+    turns = [index for index, message in enumerate(messages) if message.role == "user"]
+    kept = messages
+    for start in turns[1:]:
+        kept = [m for m in messages[:start] if m.role == "system"] + messages[start:]
+        if fits(kept):
+            return replace(req, messages=tuple(kept))
+    return _fit_overhead(replace(req, messages=tuple(kept)), limit)
+
+
+def _short_descriptions(value: Any) -> Any:
+    """A copy of a tool definition with its long descriptions shortened."""
+    if isinstance(value, list):
+        return [_short_descriptions(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    short: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "description" and isinstance(item, str):
+            short[key] = item[:_TOOL_TEXT_KEEP_CHARS]
+        else:
+            short[key] = _short_descriptions(item)
+    return short
+
+
+def _fit_overhead(req: Any, limit: int) -> Any:
+    """Last stage: shorten tool texts, then the system prompt, then the tool list."""
+    fitted = replace(req, tools=tuple(_short_descriptions(tool) for tool in req.tools or ()))
+    system = fitted.system or ""
+    allowed = int(limit * _BUDGET_CHARS_PER_TOKEN * _SYSTEM_SHARE)
+    if _budget_tokens(fitted) > limit and len(system) > allowed:
+        head = int(allowed * 0.7)
+        cut = system[:head] + "\n[...]\n" + system[-(allowed - head) :]
+        fitted = replace(fitted, system=cut)
+    tools = fitted.tools
+    while _budget_tokens(fitted) > limit and len(tools) > _MIN_TOOLS:
+        tools = tools[:-1]
+        fitted = replace(fitted, tools=tools)
+    return fitted
+
+
+def request_parts(req: Any) -> str:
+    """Which part of a request takes the space, in characters."""
+    tools = len(json.dumps(list(req.tools or ()), ensure_ascii=False, default=str))
+    text = sum(_text_chars(message.content) for message in req.messages)
+    return (
+        f"sistema={len(req.system or '')} ferramentas={len(req.tools or ())}/{tools} "
+        f"mensagens={len(req.messages)}/{text}"
+    )
 
 
 def ensure_fits(

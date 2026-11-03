@@ -9,6 +9,31 @@ PROFILES = STATE / "profiles"
 ACTIVE = STATE / "active_profile.json"
 MULTIUSER = GLOBAL / "multiuser.json"
 NATIVE_RULES = GLOBAL / "native_rules.json"
+PUBLISHER_MARKER = GLOBAL / "publicador.json"
+PUBLISHER_SCRIPT = STATE / "bridge" / "ja-publicar.py"
+
+# Regras de fabrica: valem em todas as instalacoes, Mac e Windows.
+SHIPPED_RULES = (
+    "Ao receber um pedido: 1) interprete o que foi pedido; 2) verifique se ja sabe "
+    "fazer, olhando skills, ferramentas e memoria; 3) se nao souber, pesquise como "
+    "fazer e execute; 4) confira o resultado de verdade antes de dizer que terminou.",
+    "Se algo falhar, leia o erro, descubra a causa, corrija a causa e continue ate "
+    "finalizar o pedido. Tente outro caminho em vez de repetir o que falhou. Depois de "
+    "tres caminhos diferentes sem sucesso, pare e diga exatamente o que bloqueou.",
+    "Autonomia nao libera riscos: peca confirmacao antes de apagar dados, enviar "
+    "mensagens, gastar dinheiro ou fazer algo irreversivel. Nunca grave tokens, senhas "
+    "ou chaves em codigo ou no repositorio, e nunca sobrescreva configuracoes locais.",
+)
+PUBLISHER_RULE = (
+    "Esta e a maquina publicadora. Se voce corrigiu o codigo do DodaiOS, confira que o "
+    "app funciona e publique para todos com: {python} {script} --mensagem \"o que "
+    "mudou\" --arquivo caminho/relativo/ao/pacote.py (repita --arquivo por arquivo). "
+    "So considere publicado se a saida trouxer PUBLICADO=. Nunca use outro meio de envio."
+)
+RECEIVER_RULE = (
+    "Esta maquina so recebe atualizacoes: nunca envie nada ao GitHub. Se corrigir o "
+    "codigo do DodaiOS aqui, avise qual arquivo mudou, para ser publicado pelo Mac do Thiago."
+)
 
 
 def _read_json(path: Path, default):
@@ -51,11 +76,21 @@ def profile_rules(profile_id: str | None = None) -> list[str]:
     return [str(x).strip() for x in rows if str(x).strip()]
 
 
+def shipped_rules() -> list[str]:
+    """Regras de fabrica; so o administrador da maquina publicadora publica."""
+    if PUBLISHER_MARKER.is_file() and active_profile_role() == "administrator":
+        python = STATE / ".venv" / "bin" / "python"
+        last = PUBLISHER_RULE.format(python=python, script=PUBLISHER_SCRIPT)
+    else:
+        last = RECEIVER_RULE
+    return [*SHIPPED_RULES, last]
+
+
 def merged_rules(profile_id: str | None = None) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
 
-    for rule in native_rules() + profile_rules(profile_id):
+    for rule in [*shipped_rules(), *native_rules(), *profile_rules(profile_id)]:
         rule = rule.strip()
         if rule and rule not in seen:
             seen.add(rule)

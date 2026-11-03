@@ -871,6 +871,20 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
             "highest accuracy and have the hardware for it."
         ),
     ),
+    ProviderSpec(
+        id="mlx-whisper",
+        label="MLX Whisper (Apple Silicon)",
+        tier="stt",
+        auth_mode="none",
+        secret_keys=(),
+        dashboard_url=None,
+        signup_url=None,
+        credential_help=(
+            "The fastest on-device option on a Mac: Whisper small on the Apple "
+            "Silicon GPU, with no API key and no audio leaving the device. On "
+            "any other machine voice input falls back to faster-whisper."
+        ),
+    ),
     # Deliberately last in the Voice Input picker and last among cloud runtime
     # fallbacks. It remains available for users who only have a Groq key; the
     # ordering alone de-emphasizes it (the maintainer retired the explicit

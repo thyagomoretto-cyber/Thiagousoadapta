@@ -15,6 +15,7 @@ import os
 import shlex
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 from dodaios.clis.auth import CliAuthManager
@@ -122,6 +123,31 @@ class CliTool:
                 log.debug("jarvisctl command index unavailable", exc_info=True)
         return "\n".join(lines)
 
+    def _with_own_binary(self, command: str) -> str:
+        """Complete the app's own CLI, which the model knows by its older name.
+
+        The tool is called ``jarvisctl`` and the program ``dodaiosctl``, so the
+        model writes either the old name or none. Anything run here is still
+        only ever the app's own program.
+        """
+        binary = self._spec.binary_name
+        pieces = command.split(maxsplit=1)
+        if self._spec.name != "jarvisctl" or pieces[0] == binary:
+            return command
+        if pieces[0] == self._spec.name:
+            return " ".join([binary, *pieces[1:]])
+        return f"{binary} {command}"
+
+    def _own_binary_path(self) -> str | None:
+        """The app's own CLI next to this Python, which may not be on PATH."""
+        if self._spec.name != "jarvisctl":
+            return None
+        folder = Path(sys.executable).parent
+        for name in (self._spec.binary_name, f"{self._spec.binary_name}.exe"):
+            if (folder / name).is_file():
+                return str(folder / name)
+        return None
+
     async def execute(self, args: dict[str, Any], ctx: ExecutionContext) -> ToolResult:
         command = (args.get("command") or "").strip()
         timeout_s = float(args.get("timeout_s") or DEFAULT_TIMEOUT_S)
@@ -129,6 +155,7 @@ class CliTool:
 
         if not command:
             return ToolResult(success=False, output=None, error="command fehlt")
+        command = self._with_own_binary(command)
         if not command.split(maxsplit=1)[0] == self._spec.binary_name:
             return ToolResult(
                 success=False,
@@ -148,7 +175,7 @@ class CliTool:
         # Resolve argv[0] to the full on-disk path so .cmd/.bat/.ps1 shims
         # (gcloud, npm, vercel, ...) are exec'able under shell=False on Windows.
         # The binary-guard above already pinned parts[0] to spec.binary_name.
-        parts[0] = resolve_executable(parts[0])
+        parts[0] = self._own_binary_path() or resolve_executable(parts[0])
         stdout_cap = (
             MAX_HELP_STDOUT_CHARS if _is_help_command(parts) else MAX_STDOUT_CHARS
         )

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import re
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from typing import Any
@@ -10,9 +12,41 @@ from typing import Any
 import numpy as np
 
 from dodaios.core.protocols import AudioChunk
+from dodaios.speech.local_voice import MLX_WARM_GATE, record_timing
 
 
 _INT16_FULL_SCALE = 32767.0
+
+# One engine per process. Each voice call builds a new provider, and an engine
+# per call would stack a loaded model on memory at every reconnect.
+_ENGINE: Any | None = None
+_ENGINE_LOCK = threading.Lock()
+_WARM_DONE = threading.Event()
+
+# kokoro-mlx returns a whole text as one block, so the time to the first sound
+# grows with the reply. Measured 2026-11-03 on an M1: 170 characters took 4.7 s
+# and the audio arrived 40 ms before the end. Speaking in short parts makes the
+# first sound depend on the first part only.
+_SENTENCE_END = re.compile(r"(?<=[.!?…;:])\s+")
+_PART_LIMIT = 90
+
+
+def _speakable_parts(text: str) -> list[str]:
+    """Split a reply at sentence ends, then long sentences at a comma or space."""
+    parts: list[str] = []
+    for sentence in _SENTENCE_END.split(text.strip()):
+        rest = sentence.strip()
+        while len(rest) > _PART_LIMIT:
+            cut = rest.rfind(", ", 0, _PART_LIMIT)
+            if cut < 30:
+                cut = rest.rfind(" ", 0, _PART_LIMIT)
+            if cut <= 0:
+                break
+            parts.append(rest[: cut + 1].strip())
+            rest = rest[cut + 1 :].strip()
+        if rest:
+            parts.append(rest)
+    return parts
 
 
 class KokoroLocalTTS:
@@ -36,31 +70,52 @@ class KokoroLocalTTS:
         self._language = language or "pt"
         self._sample_rate = int(sample_rate or 24000)
 
-        self._engine: Any | None = None
-        self._load_lock = threading.Lock()
-
         # Pré-carrega o Kokoro/Santa em segundo plano assim que o provider nasce.
         # Isso elimina boa parte da espera antes da primeira fala.
         threading.Thread(
-            target=self._load_engine_sync,
+            target=self._prewarm,
             name="kokoro-prewarm",
             daemon=True,
         ).start()
 
     def _load_engine_sync(self) -> Any:
-        if self._engine is not None:
-            return self._engine
+        global _ENGINE
+        if _ENGINE is not None:
+            return _ENGINE
 
-        with self._load_lock:
-            if self._engine is None:
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
                 from kokoro_mlx import KokoroTTS
-                self._engine = KokoroTTS.from_pretrained()
+                _ENGINE = KokoroTTS.from_pretrained()
 
-        return self._engine
+        return _ENGINE
+
+    def _prewarm(self) -> None:
+        """Load the engine and speak once, so the first real reply starts warm."""
+        if _WARM_DONE.is_set():
+            return
+        started = time.monotonic()
+        try:
+            with MLX_WARM_GATE:
+                engine = self._load_engine_sync()
+                if _WARM_DONE.is_set():
+                    return
+                for _samples in engine.generate_stream(
+                    "Pronto.",
+                    voice=self._voice,
+                    speed=self._speed,
+                    sample_rate=self._sample_rate,
+                    language=self._language,
+                ):
+                    pass
+            _WARM_DONE.set()
+            record_timing("tts_warm", ms=round((time.monotonic() - started) * 1000))
+        except Exception as exc:  # noqa: BLE001 — the first reply reports it
+            record_timing("tts_warm_failed", error=str(exc)[:200])
 
     async def _get_engine(self) -> Any:
-        if self._engine is not None:
-            return self._engine
+        if _ENGINE is not None:
+            return _ENGINE
 
         return await asyncio.to_thread(self._load_engine_sync)
 
@@ -84,6 +139,8 @@ class KokoroLocalTTS:
         if not spoken:
             return
 
+        started = time.monotonic()
+        first_ms: int | None = None
         engine = await self._get_engine()
 
         selected_voice = (voice or "").strip()
@@ -112,19 +169,20 @@ class KokoroLocalTTS:
 
         def generate() -> None:
             try:
-                for samples in engine.generate_stream(
-                    spoken,
-                    voice=selected_voice,
-                    speed=self._speed,
-                    sample_rate=self._sample_rate,
-                    language=lang,
-                ):
-                    if stopped.is_set():
-                        break
+                for part in _speakable_parts(spoken):
+                    for samples in engine.generate_stream(
+                        part,
+                        voice=selected_voice,
+                        speed=self._speed,
+                        sample_rate=self._sample_rate,
+                        language=lang,
+                    ):
+                        if stopped.is_set():
+                            return
 
-                    data = self._pcm(samples)
-                    if data and not put(data):
-                        break
+                        data = self._pcm(samples)
+                        if data and not put(data):
+                            return
 
             except Exception as exc:
                 failure.append(exc)
@@ -147,6 +205,9 @@ class KokoroLocalTTS:
                 if item is end:
                     break
 
+                if first_ms is None:
+                    first_ms = round((time.monotonic() - started) * 1000)
+
                 yield AudioChunk(
                     pcm=item,
                     sample_rate=self._sample_rate,
@@ -155,6 +216,12 @@ class KokoroLocalTTS:
                 )
 
             await worker
+            record_timing(
+                "tts",
+                first_audio_ms=first_ms,
+                total_ms=round((time.monotonic() - started) * 1000),
+                chars=len(spoken),
+            )
 
             if failure:
                 raise failure[0]
@@ -173,10 +240,4 @@ class KokoroLocalTTS:
         await self._get_engine()
 
     async def aclose(self) -> None:
-        engine = self._engine
-        self._engine = None
-
-        if engine is not None:
-            close = getattr(engine, "close", None)
-            if callable(close):
-                await asyncio.to_thread(close)
+        """The engine is shared by the process, so one closed call keeps it loaded."""

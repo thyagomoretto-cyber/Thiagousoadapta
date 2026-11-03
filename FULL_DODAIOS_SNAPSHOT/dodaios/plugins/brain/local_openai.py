@@ -180,6 +180,26 @@ class LocalOpenAIBrain:
         )
         return True
 
+    async def _fit_window(self, req: BrainRequest, root: str, model: str) -> BrainRequest:
+        """Shorten a long conversation to the window the server really runs."""
+        try:
+            window = await local_context.probe_server_window(
+                root, model, headers=self._probe_headers()
+            )
+        except Exception:  # noqa: BLE001 — the guard after this reports a real problem
+            return req
+        if window is None:
+            return req
+        fitted = local_context.fit_to_window(req, window.tokens)
+        if fitted is not req:
+            log.warning(
+                "Conversa encurtada para a janela de %d: antes %s, depois %s",
+                window.tokens,
+                local_context.request_parts(req),
+                local_context.request_parts(fitted),
+            )
+        return fitted
+
     async def prepare_context_window(self) -> None:
         """Settle ``context_window`` before the caller budgets a turn.
 
@@ -237,6 +257,7 @@ class LocalOpenAIBrain:
             client = await asyncio.to_thread(self._ensure_client)
         model = await self._resolve_model()
         root = self._resolve_root()
+        req = await self._fit_window(req, root, model)
         stated = await self._guard_window(req, root, model)
         reported: int | None = None
         # A server that was not started for tool calling (llama.cpp without

@@ -2,21 +2,24 @@
   "schema": 1,
   "profiles": {
     "macos-arm64": {
-      "version": 1,
+      "version": 2,
       "status": "approved",
       "packages": {
-        "kokoro-mlx": "kokoro-mlx==0.1.4"
+        "kokoro-mlx": "kokoro-mlx==0.1.4",
+        "mlx-whisper": "mlx-whisper==0.4.3"
       },
       "settings": {
         "stt": {
-          "provider": "faster-whisper",
+          "provider": "mlx-whisper",
           "provider_user_selected": true,
           "model": "small",
           "language": "pt",
           "device": "cpu",
-          "compute_type": "int8"
+          "compute_type": "int8",
+          "bias_prompt": "Cachoeirinha, Gravataí, Porto Alegre, Canoas, Canela, Gramado, Chamonix, Thiago."
         },
         "stt.models": {
+          "mlx-whisper": "mlx-community/whisper-small-mlx",
           "faster-whisper": "small"
         },
         "tts": {

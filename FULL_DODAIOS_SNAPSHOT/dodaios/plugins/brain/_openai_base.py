@@ -519,6 +519,22 @@ async def _stream_via_responses(
         yield BrainDelta(usage=usage_payload)
 
 
+def _without_leaked_markup(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Cut a local model's tool-call template out of an argument value.
+
+    Qwen can run a call into the next one, leaving ``</parameter></function>``
+    inside a path. An argument left empty is dropped so the tool's default applies.
+    """
+    clean: dict[str, Any] = {}
+    for name, value in arguments.items():
+        if isinstance(value, str) and "</parameter>" in value:
+            value = value.split("</parameter>", 1)[0].strip()
+            if not value:
+                continue
+        clean[name] = value
+    return clean
+
+
 async def stream_complete(
     client: Any,
     model: str,
@@ -718,6 +734,8 @@ async def stream_complete(
                 ) from exc
             if not isinstance(parsed, dict):
                 raise ValueError("The provider returned non-object tool arguments.")
+            if hold_think_prefix:
+                parsed = _without_leaked_markup(parsed)
             fallback_id = f"call_{key}" if isinstance(key, int) else f"call_{position}"
             calls.append({
                 "id": buf["id"] or fallback_id,

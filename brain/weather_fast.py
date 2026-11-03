@@ -6,6 +6,7 @@ Consulta o Open-Meteo e responde em uma frase. Qualquer duvida ou falha devolve
 from __future__ import annotations
 
 import asyncio
+import difflib
 import re
 import time
 import unicodedata
@@ -17,6 +18,7 @@ _TIMEOUT_S = 3.0
 _FOLLOWUP_S = 180.0
 _HOME_STATE = "Rio Grande do Sul"
 _last_answer_at = 0.0
+_last_asked_at = 0.0
 _last_place = ""
 
 _TOPIC_RE = re.compile(
@@ -33,6 +35,14 @@ _PLACE_RE = re.compile(
 )
 _NOT_PLACE = {"casa", "minha casa", "minha cidade", "aqui", "ai", "la", "geral"}
 _ALIASES = {"gravatem": "Gravatai"}
+# Cidades proximas, para quando a voz erra uma letra ("cachorinha") e o Open-Meteo
+# nao encontra nada. So entram depois que a busca normal falhou.
+_REGION_CITIES = (
+    "Cachoeirinha", "Gravatai", "Porto Alegre", "Canoas", "Alvorada", "Viamao",
+    "Esteio", "Sapucaia do Sul", "Sao Leopoldo", "Novo Hamburgo", "Guaiba",
+    "Glorinha", "Eldorado do Sul", "Canela", "Gramado", "Taquara", "Caxias do Sul",
+)
+_CORRECTION_RE = re.compile(r"^(?:nao|errado|na verdade)\b.*\be (?:em |no |na )?([a-z' -]{3,40})$")
 _NOT_FOLLOWUP = {
     "ok", "obrigado", "obrigada", "valeu", "sim", "nao", "legal", "certo", "beleza",
     "qual", "como", "quando", "onde", "porque", "quero", "faz", "abre", "abra",
@@ -91,9 +101,14 @@ def _split_state(place: str) -> tuple[str, str | None]:
 
 
 def _match_followup(normalized: str) -> tuple[str, bool] | None:
-    """Aceita so o nome do lugar logo depois de uma resposta de clima."""
-    if time.monotonic() - _last_answer_at > _FOLLOWUP_S:
+    """Aceita so o nome do lugar logo depois de uma pergunta de clima."""
+    if time.monotonic() - max(_last_answer_at, _last_asked_at) > _FOLLOWUP_S:
         return None
+    normalized = re.sub(r"\s+", " ", normalized.replace(".", " ")).strip()
+    correction = _CORRECTION_RE.search(normalized)
+    if correction is not None:
+        place = correction.group(1).strip()
+        return None if set(place.split()) & _NOT_FOLLOWUP else (place, False)
     words = normalized.split()
     if not 1 <= len(words) <= 7 or not re.fullmatch(r"[a-z' -]+", normalized):
         return None
@@ -153,6 +168,9 @@ async def _lookup(client: Any, place: str, strict: bool) -> dict[str, Any] | Non
         chosen = _pick(results, city, state, strict) if results else None
         if chosen is not None:
             return chosen
+    close = difflib.get_close_matches(_normalize(city), [_normalize(c) for c in _REGION_CITIES], n=1, cutoff=0.8)
+    if close and close[0] != _normalize(city):
+        return await _lookup(client, close[0], strict)
     return None
 
 
@@ -194,6 +212,9 @@ async def answer_weather_question(text: str, client: Any | None = None) -> str |
         return None
     place, tomorrow = matched
     strict = _TOPIC_RE.search(_normalize(text)) is None
+    if not strict:
+        global _last_asked_at
+        _last_asked_at = time.monotonic()
 
     async def ask(http: Any) -> str | None:
         city = await _lookup(http, place, strict)

@@ -162,10 +162,114 @@
     };
   }
 
+  const SPEECH_LEVEL = 0.015;
+  const END_SILENCE_S = 1.3;
+  const MAX_SPEECH_S = 30;
+  const FINISH_WORDS = /^\W*(terminar|encerrar|finalizar|pode parar)\b/i;
+
+  // Ouve uma fala inteira: comeca na voz e termina no silencio.
+  async function listen(teach) {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const context = new AudioContext({ sampleRate: 16000 });
+    const source = context.createMediaStreamSource(stream);
+    const node = context.createScriptProcessor(4096, 1, 1);
+    const pieces = [];
+    let spoke = false;
+    let silent = 0;
+    const heard = await new Promise((finish) => {
+      teach.stopListening = () => finish(false);
+      node.onaudioprocess = (event) => {
+        const samples = event.inputBuffer.getChannelData(0);
+        const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+        const seconds = samples.length / 16000;
+        if (level > SPEECH_LEVEL) { spoke = true; silent = 0; } else silent += seconds;
+        if (!spoke) return;
+        pieces.push(Int16Array.from(samples, (value) => Math.max(-1, Math.min(1, value)) * 32767));
+        if (silent >= END_SILENCE_S || pieces.length * seconds >= MAX_SPEECH_S) finish(true);
+      };
+      source.connect(node);
+      node.connect(context.destination);
+    });
+    teach.stopListening = null;
+    node.disconnect();
+    source.disconnect();
+    stream.getTracks().forEach((track) => track.stop());
+    await context.close();
+    if (!heard) return null;
+    const audio = new Int16Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
+    let at = 0;
+    pieces.forEach((piece) => { audio.set(piece, at); at += piece.length; });
+    return audio;
+  }
+
+  async function transcribe(audio) {
+    const response = await fetch("/api/company-voice/transcribe", { method: "POST", body: audio.buffer });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || "Falha ao transcrever");
+    return payload.text || "";
+  }
+
+  // Fala a resposta sem as linhas de aprendizado; nunca segura o ensino.
+  function speak(text) {
+    const spoken = text.split("\n").filter((line) => !/^\W*(PASSO|REGRA|EXCECAO|VALIDAR|EXEMPLO):/.test(line)).join(" ").trim();
+    if (!spoken || !window.speechSynthesis) return Promise.resolve();
+    return new Promise((finish) => {
+      const voice = new SpeechSynthesisUtterance(spoken.slice(0, 400));
+      voice.lang = "pt-BR";
+      voice.onend = finish;
+      voice.onerror = finish;
+      window.speechSynthesis.speak(voice);
+      setTimeout(finish, Math.min(20000, 1500 + spoken.length * 90));
+    });
+  }
+
+  function setStatus(teach, text) {
+    teach.status = text;
+    render();
+  }
+
+  async function teachByVoice() {
+    const teach = state.teach;
+    teach.live = true;
+    while (state.teach === teach && teach.live) {
+      setStatus(teach, "Ouvindo. Fale o próximo passo, ou diga terminar.");
+      const audio = await listen(teach);
+      if (!audio || !teach.live) break;
+      setStatus(teach, "Transcrevendo...");
+      const text = (await transcribe(audio)).trim();
+      if (!text) continue;
+      if (FINISH_WORDS.test(text)) {
+        teach.live = false;
+        teach.log.push({ who: "Você", text });
+        if (teach.learned.length) await saveLearned();
+        break;
+      }
+      setStatus(teach, "Executando...");
+      await sendTeach(text);
+      const last = teach.log[teach.log.length - 1];
+      if (last.who === "Ele" && teach.live) {
+        setStatus(teach, "Respondendo...");
+        await speak(last.text);
+      }
+    }
+    teach.live = false;
+    teach.status = "";
+    if (teach.stopListening) teach.stopListening();
+  }
+
+  function stopTeachByVoice() {
+    const teach = state.teach;
+    teach.live = false;
+    if (teach.stopListening) teach.stopListening();
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+    teach.status = "";
+    render();
+  }
+
   function teachView() {
     const teach = state.teach;
     const text = area("", "ensino", 3);
-    const speak = button("Falar", () => record(text, speak).catch((error) => { state.error = error.message; render(); }));
+    const speakButton = button("Falar", () => record(text, speakButton).catch((error) => { state.error = error.message; render(); }));
     const send = button(teach.busy ? "Executando..." : "Enviar", () => {
       if (!text.value.trim() || teach.busy) return;
       guarded(() => sendTeach(text.value.trim()));
@@ -175,9 +279,12 @@
       el("div", { textContent: entry.text, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
     ]);
     const learned = teach.learned.map((item) => el("div", { textContent: `${item.kind}: ${item.text}`, style: { marginTop: "4px", fontSize: "12px" } }));
-    return [row([button("← Sair do ensino", () => { state.teach = null; render(); })]),
-      el("p", { textContent: "Explique um passo. Ele executa, pergunta se precisar, e você corrige ou confirma.", style: { fontSize: "12px", color: colors.muted } }),
-      ...teach.log.map(lineOf), label("Sua instrução"), text, row([speak, send]),
+    const voice = teach.live
+      ? button("Parar de ouvir", stopTeachByVoice, true)
+      : button("Ensinar por voz", () => guarded(teachByVoice), true);
+    return [row([button("← Sair do ensino", () => { if (teach.live) stopTeachByVoice(); state.teach = null; render(); }), voice]),
+      el("p", { textContent: teach.status || "Fale normalmente. Ele executa cada passo, responde e volta a ouvir até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
+      ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
       ...(learned.length ? [title("Aprendeu nesta conversa"), ...learned, row([button("Salvar aprendizado", () => guarded(saveLearned), true)])] : [])];
   }
 

@@ -204,6 +204,7 @@
       node.onaudioprocess = (event) => {
         const samples = event.inputBuffer.getChannelData(0);
         const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+        if (teach.speaking) return;
         const seconds = samples.length / context.sampleRate;
         if (level > SPEECH_LEVEL) { spoke = true; silent = 0; } else silent += seconds;
         const now = Date.now();
@@ -262,30 +263,70 @@
     render();
   }
 
+  async function runLiveStep(teach, text) {
+    const result = await api("/api/company-voice/act", { method: "POST", body: { text, pendingLink: teach.pendingLink || "" } });
+    if (result.done) {
+      teach.pendingLink = "";
+      teach.log.push({ who: "Você", text }, { who: "Ele", text: `Feito: ${result.step}` });
+      teach.learned.push({ kind: "PASSO", text: result.step });
+      await saveLearned();
+      return;
+    }
+    if (result.needs_link) {
+      teach.pendingLink = result.needs_link;
+      teach.log.push({ who: "Você", text }, { who: "Ele", text: `Qual é o endereço de ${result.needs_link}? Diga, por exemplo: site ponto com ponto br.` });
+      await say(teach, `Qual é o endereço de ${result.needs_link}?`);
+      return;
+    }
+    await sendTeach(text);
+    const last = teach.log[teach.log.length - 1];
+    if (last.who === "Ele" && last.text.includes("?")) await say(teach, last.text);
+  }
+
+  async function say(teach, text) {
+    teach.speaking = true;
+    await speak(text);
+    teach.speaking = false;
+  }
+
+  // Executa em ordem enquanto o microfone continua ouvindo.
+  async function runQueue(teach) {
+    if (teach.running) return;
+    teach.running = true;
+    while (teach.queue.length && state.teach === teach) {
+      const text = teach.queue.shift();
+      teach.working = text;
+      render();
+      try {
+        await runLiveStep(teach, text);
+      } catch (error) {
+        state.error = error.message || "Falha";
+      }
+      teach.working = "";
+      render();
+    }
+    teach.running = false;
+  }
+
   async function teachByVoice() {
     const teach = state.teach;
     teach.live = true;
     teach.audio = new AudioContext();
+    teach.queue = [];
     try {
     while (state.teach === teach && teach.live) {
-      setStatus(teach, "Ouvindo. Fale o próximo passo, ou diga terminar.");
+      setStatus(teach, teach.working ? `Ouvindo enquanto executa: ${teach.working}` : "Ouvindo. Fale o próximo passo, ou diga terminar.");
       const audio = await listen(teach);
       if (!audio || !teach.live) break;
-      setStatus(teach, "Transcrevendo...");
       const text = (await transcribe(audio)).trim();
-      if (!text) continue;
+      if (text.length < 3) continue;
       if (FINISH_WORDS.test(text)) {
         teach.log.push({ who: "Você", text });
         state.notice = "Ensino encerrado. Tudo já está registrado na habilidade.";
         break;
       }
-      setStatus(teach, "Executando...");
-      await sendTeach(text);
-      const last = teach.log[teach.log.length - 1];
-      if (last.who === "Ele" && teach.live) {
-        setStatus(teach, "Respondendo...");
-        await speak(last.text);
-      }
+      teach.queue.push(text);
+      runQueue(teach);
     }
     } finally {
       teach.live = false;
@@ -321,7 +362,7 @@
       ? button("Parar de ouvir", stopTeachByVoice, true)
       : button("Ensinar por voz", () => guarded(teachByVoice), true);
     return [row([button("← Sair do ensino", () => { if (teach.live) stopTeachByVoice(); state.teach = null; render(); }), voice]),
-      el("p", { textContent: teach.status || "Fale normalmente. Ele executa cada passo, responde e volta a ouvir até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
+      el("p", { textContent: teach.status || "Fale normalmente. Ele executa ao vivo e continua ouvindo até você dizer terminar.", style: { fontSize: "12px", color: colors.muted } }),
       ...(teach.live ? [meter()] : []),
       ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
       ...(learned.length ? [title("Já registrado nesta conversa"), ...learned] : [])];

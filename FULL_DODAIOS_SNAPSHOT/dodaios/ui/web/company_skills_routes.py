@@ -1,6 +1,8 @@
 """Rotas do modo de aprendizado: habilidades ensinadas a cada empresa."""
 from __future__ import annotations
 
+import subprocess
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -111,6 +113,22 @@ def add_skill_example(company_id: str, skill_id: str, body: Example) -> dict:
 def add_skill_correction(company_id: str, skill_id: str, body: Correction) -> dict:
     _company_name(company_id)
     return _guarded(store.add_correction, company_id, skill_id, body.text)
+
+
+class LiveStep(BaseModel):
+    text: str = Field(max_length=_MAX_TEXT)
+    pendingLink: str = Field(default="", max_length=240)
+
+
+@voice_router.post("/act")
+def act_on_step(body: LiveStep) -> dict:
+    """Executa na hora os passos que nao precisam do modelo."""
+    from dodaios.core.live_actions import act
+
+    try:
+        return act(body.text, body.pendingLink)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail=f"Nao consegui abrir: {exc}") from exc
 
 
 @voice_router.post("/transcribe")

@@ -24,6 +24,8 @@ Do Mac foram incorporados: TTS `kokoro-local` e modelo NVIDIA `nemotron-3.5-supe
 
 No Mac, o `DodaiOS.app` é só a janela e depende do backend em segundo plano. O `bridge/ja-supervisor.py` mantém esse backend ativo e deve iniciá-lo quando estiver ausente; nunca abra só o app após encerrar o backend.
 
+A voz é definida por sistema em `setup/voice_profiles.json` e aplicada por `python -m dodaios.setup.voice_profile --apply`. Só perfis `approved` são aplicados, uma vez por versão. O perfil do Mac está aprovado; o do Windows segue como `candidate` até ser validado.
+
 O `dist` deste repositório só recebeu o reparo do regex. A nova tela de usuário entra no próximo build.
 
 ## Prioridade atual

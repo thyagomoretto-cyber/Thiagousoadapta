@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "profiles": {
+    "macos-arm64": {
+      "version": 1,
+      "status": "approved",
+      "packages": {
+        "kokoro-mlx": "kokoro-mlx==0.1.4"
+      },
+      "settings": {
+        "stt": {
+          "provider": "faster-whisper",
+          "provider_user_selected": true,
+          "model": "small",
+          "language": "pt",
+          "device": "cpu",
+          "compute_type": "int8"
+        },
+        "stt.models": {
+          "faster-whisper": "small"
+        },
+        "tts": {
+          "provider": "kokoro-local",
+          "voice": "pm_santa",
+          "language_code": "pt-BR",
+          "speed": 1.0,
+          "streaming": true
+        },
+        "voice": {
+          "mode": "pipeline",
+          "complete_grace_ms": 0
+        },
+        "speech": {
+          "vad_silence_ms": 500
+        },
+        "ack_brain": {
+          "preamble_enabled": false
+        }
+      }
+    },
+    "windows-x64": {
+      "version": 1,
+      "status": "candidate",
+      "packages": {},
+      "settings": {
+        "stt": {
+          "provider": "nemotron-local",
+          "provider_user_selected": true,
+          "language": "pt"
+        },
+        "tts": {
+          "provider": "piper-local",
+          "voice_de": "vits-piper-pt_BR-faber-medium",
+          "voice_en": "vits-piper-pt_BR-faber-medium",
+          "language_code": "pt-BR",
+          "speed": 0.7,
+          "streaming": true
+        },
+        "voice": {
+          "mode": "pipeline"
+        }
+      }
+    }
+  }
+}

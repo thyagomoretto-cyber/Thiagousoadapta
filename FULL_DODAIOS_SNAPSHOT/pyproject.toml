@@ -956,6 +956,7 @@ dodaios = [
     # In-repo C source for the macOS stub launcher, compiled at install time
     # by dodaios/setup/macos_app_bundle.py (BUG-060 stable TCC identity).
     "setup/*.c",
+    "setup/voice_profiles.json",
     # Vendored upstream patch + pinned package set for the managed
     # local-realtime server install (realtime/local_server/patching.py and
     # install.py read them via Path(__file__)).

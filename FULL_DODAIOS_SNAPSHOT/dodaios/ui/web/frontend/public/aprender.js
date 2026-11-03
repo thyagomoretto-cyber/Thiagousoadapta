@@ -120,6 +120,92 @@
     throw new Error("Ele demorou demais para responder. Veja o chat do ensino.");
   }
 
+  // Uma conversa nova por imovel: o historico de um nao pesa no proximo.
+  async function askAgent(skill, text, batch) {
+    const session = await startSession(skill);
+    const url = `/api/agent-chat/sessions/${session}`;
+    const sent = await api(`${url}/messages`, { method: "POST", body: { text } });
+    for (let tries = 0; tries < 900 && !batch.stop; tries += 1) {
+      await new Promise((done) => setTimeout(done, 2000));
+      const events = (await api(`${url}?tail=200`)).events || [];
+      const ours = (event) => (event.payload || {}).turn_id === sent.turn_id;
+      if (events.some((event) => event.kind === "turn_finished" && ours(event))) {
+        return events.filter((event) => event.kind === "assistant_text" && ours(event)).map((event) => event.payload.text).join("\n");
+      }
+    }
+    return "";
+  }
+
+  function batchPrompt(skill, item) {
+    const place = item.condominio ? "em condomínio" : "fora de condomínio";
+    return [`Cadastre um imóvel usando a habilidade "${skill.name}" da empresa ${skill.company}.`,
+      `Classificação: ${item.tipo}, ${item.finalidade}, ${place}.`, `Texto recebido:\n${item.texto}`,
+      `Fotos: ${(item.fotos || []).join(", ") || "nenhuma"}.`,
+      "Antes de cadastrar, procure no sistema se o imóvel já existe. Confira o cadastro no final.",
+      "Termine com uma linha exata: RESULTADO: CADASTRADO, ou RESULTADO: JA EXISTE, ou RESULTADO: REVISAR e o motivo."].join("\n");
+  }
+
+  async function runBatch(skill) {
+    const batch = { stop: false, done: 0, existed: 0, review: 0 };
+    state.batch = batch;
+    render();
+    for (;;) {
+      const item = (await api("/api/company-voice/imoveis")).proximo;
+      if (!item || batch.stop) break;
+      batch.current = item.texto.split("\n")[0];
+      render();
+      const reply = await askAgent(skill, batchPrompt(skill, item), batch);
+      if (batch.stop) break;
+      const result = (reply.match(/RESULTADO:\s*(CADASTRADO|JA EXISTE|REVISAR)(.*)/i) || []);
+      const verdict = (result[1] || "").toUpperCase();
+      const status = verdict === "CADASTRADO" || verdict === "JA EXISTE" ? "cadastrado" : "revisar";
+      await api(`/api/company-voice/imoveis/${encodeURIComponent(item.chave)}/situacao`, { method: "POST", body: { status, note: verdict ? `${verdict}${result[2] || ""}`.trim() : "Sem resultado claro do assistente" } });
+      if (verdict === "CADASTRADO") batch.done += 1; else if (verdict === "JA EXISTE") batch.existed += 1; else batch.review += 1;
+    }
+    state.batch = null;
+    state.notice = `Lote encerrado: ${batch.done} cadastrados, ${batch.existed} já existiam, ${batch.review} para revisar.`;
+  }
+
+  function askGroup() {
+    ask("Nome exato do grupo do WhatsApp", async (grupo) => {
+      state.notice = "";
+      state.reading = true;
+      render();
+      try {
+        const result = await api("/api/company-voice/imoveis/ler", { method: "POST", body: { grupo } });
+        state.notice = `Grupo lido: ${result.novos} novos, ${result.ja_conhecidos} já conhecidos, ${result.fotos} fotos.`;
+      } finally {
+        state.reading = false;
+      }
+    });
+  }
+
+  async function openReview() {
+    state.review = (await api("/api/company-voice/imoveis")).revisar[0] || null;
+    if (!state.review) state.notice = "Nenhum imóvel para revisar.";
+  }
+
+  function reviewView() {
+    const item = state.review;
+    const choose = (name, value, options) => {
+      const select = el("select", { name, style: fieldStyle }, options.map(([id, text]) => el("option", { value: id, textContent: text })));
+      select.value = value;
+      return select;
+    };
+    const kind = choose("tipo", item.tipo || "", [["", "Escolha"], ...["apartamento", "casa", "sala", "loja", "predio", "pavilhao", "terreno"].map((id) => [id, id])]);
+    const purpose = choose("finalidade", item.finalidade || "", [["", "Escolha"], ["residencial", "residencial"], ["comercial", "comercial"]]);
+    const condo = choose("condominio", item.condominio === null ? "" : String(item.condominio), [["", "Escolha"], ["true", "Sim"], ["false", "Não"]]);
+    const release = () => guarded(async () => {
+      if (!condo.value) throw new Error("Diga se está em condomínio.");
+      await api(`/api/company-voice/imoveis/${encodeURIComponent(item.chave)}/resposta`, { method: "POST", body: { tipo: kind.value, finalidade: purpose.value, condominio: condo.value === "true" } });
+      await openReview();
+    });
+    return [row([button("← Voltar", () => { state.review = null; render(); })]),
+      title("Imóvel para revisar"), el("div", { textContent: item.texto, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
+      ...[...(item.duvidas || []), ...(item.nota ? [item.nota] : [])].map((text) => el("div", { textContent: `• ${text}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })),
+      label("Tipo"), kind, label("Finalidade"), purpose, label("Em condomínio"), condo, row([button("Liberar para cadastro", release, true)])];
+  }
+
   async function saveLearned() {
     const skill = state.skill;
     const learned = state.teach.learned;
@@ -488,6 +574,10 @@
     const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
     const teach = () => { state.teach = { session: null, log: [], learned: [], saved: [], busy: false }; render(); };
     return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Ensinar conversando", teach, true), button("Testar habilidade", test)]),
+      row([button(state.reading ? "Lendo o grupo..." : "Ler grupo do WhatsApp", askGroup),
+        state.batch ? button("Parar lote", () => { state.batch.stop = true; render(); }) : button("Cadastrar os novos", () => guarded(() => runBatch(skill))),
+        button("Revisar imóveis", () => guarded(openReview))]),
+      ...(state.batch ? [el("div", { textContent: `Cadastrando: ${state.batch.current || "..."} (${state.batch.done} feitos)`, style: { marginTop: "10px", fontSize: "12px", color: colors.muted } })] : []),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
       label("Nome"), form.name, label("Quando usar"), form.whenToUse, label("Passos, um por linha"), form.steps,
       label("Regras, uma por linha"), form.rules, label("Decisões conforme o caso, uma por linha"), form.conditions, label("Exceções, uma por linha"), form.exceptions, label("Como validar, um por linha"), form.validation,
@@ -501,7 +591,7 @@
 
   function render() {
     if (!panel) return;
-    const body = state.asking ? askView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
+    const body = state.asking ? askView() : state.review ? reviewView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
     panel.replaceChildren(
       el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
         el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),

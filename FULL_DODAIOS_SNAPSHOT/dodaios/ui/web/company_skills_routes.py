@@ -1,6 +1,7 @@
 """Rotas do modo de aprendizado: habilidades ensinadas a cada empresa."""
 from __future__ import annotations
 
+import json
 import subprocess
 
 from fastapi import APIRouter, HTTPException, Request
@@ -145,3 +146,77 @@ async def transcribe_teaching(request: Request) -> dict:
         _stt = build_stt_from_config(load_config().stt)
     result = await _stt.transcribe_pcm(audio, sample_rate=16_000)
     return {"text": (getattr(result, "text", "") or "").strip()}
+
+
+class PropertyMark(BaseModel):
+    status: str = Field(max_length=20)
+    note: str = Field(default="", max_length=_MAX_TEXT)
+
+
+class PropertyAnswers(BaseModel):
+    tipo: str = Field(default="", max_length=40)
+    finalidade: str = Field(default="", max_length=40)
+    condominio: bool | None = None
+
+
+class GroupRead(BaseModel):
+    grupo: str = Field(min_length=1, max_length=240)
+
+
+@voice_router.post("/imoveis/ler")
+async def read_whatsapp_group(body: GroupRead) -> dict:
+    """Le o grupo do WhatsApp no Chrome separado e devolve o resumo."""
+    import asyncio
+    import sys
+    from pathlib import Path
+
+    script = Path.home() / ".dodaios" / "bridge" / "ja-whatsapp-imoveis.py"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable, str(script), "--grupo", body.grupo,
+        cwd=str(script.parents[1]),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=1800)
+    except TimeoutError as exc:
+        process.kill()
+        raise HTTPException(status_code=504, detail="A leitura demorou demais") from exc
+    text = output.decode("utf-8", "replace")
+    for line in reversed(text.splitlines()):
+        if line.startswith("WHATSAPP_LIDO="):
+            return json.loads(line.split("=", 1)[1])
+        if line.startswith("WHATSAPP_SEM_LOGIN"):
+            raise HTTPException(status_code=409, detail="Entre no WhatsApp com o QR Code primeiro")
+    raise HTTPException(status_code=500, detail="Falha ao ler o grupo: " + text[-300:])
+
+
+@voice_router.get("/imoveis")
+def properties_summary() -> dict:
+    from dodaios.core import property_intake as intake
+
+    return {**intake.summary(), "proximo": intake.next_pending()}
+
+
+@voice_router.post("/imoveis/{key}/situacao")
+def mark_property(key: str, body: PropertyMark) -> dict:
+    from dodaios.core import property_intake as intake
+
+    try:
+        return intake.mark(key, body.status, body.note)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Imovel nao encontrado") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@voice_router.post("/imoveis/{key}/resposta")
+def answer_property(key: str, body: PropertyAnswers) -> dict:
+    from dodaios.core import property_intake as intake
+
+    try:
+        return intake.resolve(key, body.model_dump())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Imovel nao encontrado") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

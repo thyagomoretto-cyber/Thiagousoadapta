@@ -112,6 +112,12 @@ _TOOL_TEXT_KEEP_CHARS: Final[int] = 200
 _SYSTEM_SHARE: Final[float] = 0.4
 #: Tools that always stay, so the assistant can still act.
 _MIN_TOOLS: Final[int] = 12
+#: Messages shortened only after everything older.
+_RECENT_MESSAGES: Final[int] = 4
+#: Block fields that identify a message and must reach the server unchanged.
+_STRUCTURAL_KEYS: Final[frozenset[str]] = frozenset(
+    {"type", "id", "name", "tool_use_id", "tool_call_id", "media_type"}
+)
 _SHORTENED_NOTE: Final[str] = "\n[resultado antigo encurtado para caber no contexto]"
 
 #: How long a server's answer about its own window is trusted. Short, because
@@ -319,27 +325,39 @@ def fit_to_window(req: Any, window_tokens: int) -> Any:
         return _budget_tokens(replace(req, messages=tuple(messages))) <= limit
 
     messages = list(req.messages)
-    oversized = [
-        index
-        for index, message in enumerate(messages)
-        if message.role == "tool"
-        and isinstance(message.content, str)
-        and len(message.content) > _TOOL_RESULT_KEEP_CHARS
-    ]
-    for index in oversized:
-        message = messages[index]
-        messages[index] = replace(
-            message, content=message.content[:_TOOL_RESULT_KEEP_CHARS] + _SHORTENED_NOTE
-        )
-        if fits(messages):
-            return replace(req, messages=tuple(messages))
     turns = [index for index, message in enumerate(messages) if message.role == "user"]
+    request_index = turns[-1] if turns else -1
+    # The newest results are what the model is working on, so they go last.
+    older = [i for i in range(len(messages)) if i != request_index]
+    for index in [*older[:-_RECENT_MESSAGES], *older[-_RECENT_MESSAGES:]]:
+        message = messages[index]
+        shortened = _shortened(message.content)
+        if shortened != message.content:
+            messages[index] = replace(message, content=shortened)
+            if fits(messages):
+                return replace(req, messages=tuple(messages))
     kept = messages
     for start in turns[1:]:
         kept = [m for m in messages[:start] if m.role == "system"] + messages[start:]
         if fits(kept):
             return replace(req, messages=tuple(kept))
     return _fit_overhead(replace(req, messages=tuple(kept)), limit)
+
+
+def _shortened(content: Any) -> Any:
+    """``content`` with every long text cut, whatever shape the message has."""
+    if isinstance(content, str):
+        if len(content) <= _TOOL_RESULT_KEEP_CHARS:
+            return content
+        return content[:_TOOL_RESULT_KEEP_CHARS] + _SHORTENED_NOTE
+    if isinstance(content, list):
+        return [_shortened(item) for item in content]
+    if isinstance(content, dict):
+        return {
+            key: item if key in _STRUCTURAL_KEYS else _shortened(item)
+            for key, item in content.items()
+        }
+    return content
 
 
 def _short_descriptions(value: Any) -> Any:

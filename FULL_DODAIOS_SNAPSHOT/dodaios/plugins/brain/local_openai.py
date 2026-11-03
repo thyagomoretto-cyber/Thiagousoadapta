@@ -153,9 +153,27 @@ class LocalOpenAIBrain:
                 f"The server at {root} lists no models (/v1/models is empty) — "
                 "load a model in the server, or set one explicitly on the card."
             )
-        self._model = names[0]
-        log.info("local-openai: no model configured — using first served: %s", self._model)
+        self._model = await self._largest_window(root, names)
+        log.info("local-openai: no model configured — using served: %s", self._model)
         return self._model
+
+    async def _largest_window(self, root: str, names: list[str]) -> str:
+        """The served model with the largest context, else the first one.
+
+        A server can hold two copies of a model. The first one listed may be a
+        leftover with a small window, which refused every request (2026-11-03).
+        """
+        best, best_tokens = names[0], 0
+        for name in names:
+            try:
+                window = await local_context.probe_server_window(
+                    root, name, headers=self._probe_headers()
+                )
+            except Exception:  # noqa: BLE001 — a failed probe only loses the comparison
+                continue
+            if window is not None and window.tokens > best_tokens:
+                best, best_tokens = name, window.tokens
+        return best
 
     def _probe_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._credential}"} if self._credential else {}

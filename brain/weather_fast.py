@@ -17,6 +17,7 @@ _TIMEOUT_S = 3.0
 _FOLLOWUP_S = 180.0
 _HOME_STATE = "Rio Grande do Sul"
 _last_answer_at = 0.0
+_last_place = ""
 
 _TOPIC_RE = re.compile(
     r"\b(temperatura|clima|previsao(?: do tempo)?|quantos graus|o tempo|tempo|"
@@ -35,6 +36,8 @@ _ALIASES = {"gravatem": "Gravatai"}
 _NOT_FOLLOWUP = {
     "ok", "obrigado", "obrigada", "valeu", "sim", "nao", "legal", "certo", "beleza",
     "qual", "como", "quando", "onde", "porque", "quero", "faz", "abre", "abra",
+    "voce", "tu", "ele", "ela", "isso", "aquilo", "mais", "nada", "pronto", "bom",
+    "tudo", "oi", "ola", "tchau",
 }
 _STATES = {
     "acre": "Acre", "ac": "Acre", "alagoas": "Alagoas", "al": "Alagoas",
@@ -94,8 +97,12 @@ def _match_followup(normalized: str) -> tuple[str, bool] | None:
     words = normalized.split()
     if not 1 <= len(words) <= 7 or not re.fullmatch(r"[a-z' -]+", normalized):
         return None
-    if words[0] in ("em", "no", "na"):
+    if words[0] in ("e", "agora", "tambem"):
         words = words[1:]
+    if words and words[0] in ("em", "no", "na", "para", "pra"):
+        words = words[1:]
+    if words in (["amanha"], ["hoje"]) and _last_place:
+        return _last_place, words == ["amanha"]
     if not words or set(words) & _NOT_FOLLOWUP:
         return None
     return " ".join(words), False
@@ -117,8 +124,12 @@ def match_weather_question(text: str) -> tuple[str, bool] | None:
     return _ALIASES.get(place, place), "amanha" in normalized
 
 
-def _pick(results: list[dict[str, Any]], city: str, state: str | None) -> dict[str, Any] | None:
+def _pick(
+    results: list[dict[str, Any]], city: str, state: str | None, strict: bool
+) -> dict[str, Any] | None:
     exact = [item for item in results if _normalize(item.get("name") or "") == _normalize(city)]
+    if strict and not exact:
+        return None
     options = exact or results
     if state:
         same_state = [item for item in options if item.get("admin1") == state]
@@ -131,7 +142,7 @@ def _pick(results: list[dict[str, Any]], city: str, state: str | None) -> dict[s
     return max(options, key=lambda item: item.get("population") or 0)
 
 
-async def _lookup(client: Any, place: str) -> dict[str, Any] | None:
+async def _lookup(client: Any, place: str, strict: bool) -> dict[str, Any] | None:
     city, state = _split_state(place)
     for extra in ({"countryCode": "BR"}, {}):
         response = await client.get(
@@ -139,7 +150,7 @@ async def _lookup(client: Any, place: str) -> dict[str, Any] | None:
             params={"name": city, "count": 10, "language": "pt", "format": "json", **extra},
         )
         results = (response.json() or {}).get("results") or []
-        chosen = _pick(results, city, state) if results else None
+        chosen = _pick(results, city, state, strict) if results else None
         if chosen is not None:
             return chosen
     return None
@@ -182,9 +193,10 @@ async def answer_weather_question(text: str, client: Any | None = None) -> str |
     if matched is None:
         return None
     place, tomorrow = matched
+    strict = _TOPIC_RE.search(_normalize(text)) is None
 
     async def ask(http: Any) -> str | None:
-        city = await _lookup(http, place)
+        city = await _lookup(http, place, strict)
         if city is None:
             return None
         response = await http.get(
@@ -203,8 +215,9 @@ async def answer_weather_question(text: str, client: Any | None = None) -> str |
         )
         reply = _sentence(city, response.json() or {}, tomorrow)
         if reply is not None:
-            global _last_answer_at
+            global _last_answer_at, _last_place
             _last_answer_at = time.monotonic()
+            _last_place = place
         return reply
 
     try:

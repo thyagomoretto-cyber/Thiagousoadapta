@@ -132,23 +132,45 @@ def act_on_step(body: LiveStep) -> dict:
         raise HTTPException(status_code=500, detail=f"Nao consegui abrir: {exc}") from exc
 
 
-@voice_router.post("/observar/{action}")
-def observe_clicks(action: str) -> dict:
-    """Liga ou desliga o aprendizado pelos cliques do dono."""
-    from dodaios.core.screen_control import OBSERVER
+class TeachStart(BaseModel):
+    companyId: str = Field(max_length=240)
+    skillId: str = Field(max_length=240)
 
-    try:
-        OBSERVER.start() if action == "iniciar" else OBSERVER.stop()
-    except Exception as exc:  # noqa: BLE001 — o ensino continua sem observar
-        return {"ok": False, "detail": str(exc)[:200]}
+
+@voice_router.post("/ensino/iniciar")
+def start_live_teaching(body: TeachStart) -> dict:
+    """Comeca a ouvir e executar no servidor, ate finalizar o aprendizado."""
+    from dodaios.core.live_teach import SESSION
+
+    _guarded(store.get_skill, body.companyId, body.skillId)
+    SESSION.start(body.companyId, body.skillId)
     return {"ok": True}
 
 
-@voice_router.get("/observar/passos")
-def observed_steps(desde: int = 0) -> dict:
-    from dodaios.core.screen_control import OBSERVER
+@voice_router.post("/ensino/parar")
+def stop_live_teaching() -> dict:
+    from dodaios.core.live_teach import SESSION
 
-    return {"passos": OBSERVER.steps_after(desde)}
+    SESSION.stop()
+    return {"ok": True}
+
+
+@voice_router.get("/ensino/estado")
+def live_teaching_state(desde: int = 0, assistente: int = 0) -> dict:
+    from dodaios.core.live_teach import SESSION
+
+    return SESSION.snapshot(desde, assistente)
+
+
+@voice_router.get("/ensino/microfone")
+def live_microphone_level() -> dict:
+    """Mede um segundo de audio; serve para conferir a permissao do microfone."""
+    from dodaios.core.live_teach import microphone_level
+
+    try:
+        return {"ok": True, "nivel": round(microphone_level(), 4)}
+    except Exception as exc:  # noqa: BLE001 — o motivo vai para o instalador
+        return {"ok": False, "detail": str(exc)[:200]}
 
 
 @voice_router.get("/permissoes")

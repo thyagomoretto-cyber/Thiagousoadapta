@@ -76,9 +76,9 @@
 
   const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. Quando o caminho mudar conforme o caso, como um imovel comercial ou residencial, pergunte como identificar e registre a decisao. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / CONDICAO: se tal caso, entao fazer tal coisa / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
 
-  async function sendTeach(text) {
+  async function sendTeach(text, alreadyLogged) {
     const teach = state.teach;
-    teach.log.push({ who: "Você", text });
+    if (!alreadyLogged) teach.log.push({ who: "Você", text });
     teach.busy = true;
     render();
     try {
@@ -207,7 +207,7 @@
   }
 
   async function saveLearned() {
-    const skill = state.skill;
+    const skill = await api(skillsUrl(`/${state.skill.id}`));
     const learned = state.teach.learned;
     const pick = (kind) => learned.filter((item) => item.kind === kind).map((item) => item.text);
     const merge = (old, kind) => [...new Set([...old, ...pick(kind)])];
@@ -259,198 +259,44 @@
     };
   }
 
-  const SPEECH_LEVEL = 0.015;
-  const END_SILENCE_S = 1.3;
-  const MAX_SPEECH_S = 30;
-  const FINISH_WORDS = /^\W*(finalizar aprendizado|finalizar o aprendizado|terminar aprendizado|encerrar aprendizado)\b/i;
-
-  // Ouve uma fala inteira: comeca na voz e termina no silencio.
-  function toSixteenK(samples, rate) {
-    const step = rate / 16000;
-    const output = new Int16Array(Math.floor(samples.length / step));
-    for (let index = 0; index < output.length; index += 1) {
-      output[index] = Math.max(-1, Math.min(1, samples[Math.floor(index * step)])) * 32767;
-    }
-    return output;
-  }
-
-  // O WebKit so libera o audio pelo clique, entao o contexto nasce la e fica vivo.
-  async function listen(teach) {
-    const context = teach.audio;
-    await context.resume();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const source = context.createMediaStreamSource(stream);
-    const node = context.createScriptProcessor(4096, 1, 1);
-    const pieces = [];
-    let lastMeter = 0;
-    let spoke = false;
-    let silent = 0;
-    const heard = await new Promise((finish) => {
-      teach.stopListening = () => finish(false);
-      node.onaudioprocess = (event) => {
-        const samples = event.inputBuffer.getChannelData(0);
-        const level = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
-        if (teach.speaking) return;
-        const seconds = samples.length / context.sampleRate;
-        if (level > SPEECH_LEVEL) { spoke = true; silent = 0; } else silent += seconds;
-        const now = Date.now();
-        if (now - lastMeter > 500) {
-          lastMeter = now;
-          const meter = document.querySelector("[data-aprender-nivel]");
-          if (meter) meter.textContent = `Microfone: ${Math.round(Math.min(1, level * 20) * 100)}%`;
-        }
-        if (!spoke) return;
-        pieces.push(toSixteenK(samples, context.sampleRate));
-        if (silent >= END_SILENCE_S || pieces.length * seconds >= MAX_SPEECH_S) finish(true);
-      };
-      source.connect(node);
-      node.connect(context.destination);
-    });
-    teach.stopListening = null;
-    node.disconnect();
-    source.disconnect();
-    stream.getTracks().forEach((track) => track.stop());
-    if (!heard) return null;
-    const audio = new Int16Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
-    let at = 0;
-    pieces.forEach((piece) => { audio.set(piece, at); at += piece.length; });
-    return audio;
-  }
-
-  async function transcribe(audio) {
-    const response = await fetch("/api/company-voice/transcribe", { method: "POST", body: audio.buffer });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.detail || "Falha ao transcrever");
-    return payload.text || "";
-  }
-
-  // Fala a resposta sem as linhas de aprendizado; nunca segura o ensino.
-  function speak(text) {
-    const spoken = text.split("\n").filter((line) => !/^\W*(PASSO|REGRA|EXCECAO|VALIDAR|EXEMPLO):/.test(line)).join(" ").trim();
-    if (!spoken || !window.speechSynthesis) return Promise.resolve();
-    return new Promise((finish) => {
-      const voice = new SpeechSynthesisUtterance(spoken.slice(0, 400));
-      voice.lang = "pt-BR";
-      voice.onend = finish;
-      voice.onerror = finish;
-      window.speechSynthesis.speak(voice);
-      setTimeout(finish, Math.min(20000, 1500 + spoken.length * 90));
-    });
-  }
-
-  function meter() {
-    const node = el("div", { textContent: "Microfone: 0%", style: { fontSize: "12px", color: colors.muted } });
-    node.dataset.aprenderNivel = "1";
-    return node;
-  }
-
-  function setStatus(teach, text) {
-    teach.status = text;
-    render();
-  }
-
-  async function runLiveStep(teach, text) {
-    const result = await api("/api/company-voice/act", { method: "POST", body: { text, pendingLink: teach.pendingLink || "" } });
-    if (result.failed) {
-      teach.log.push({ who: "Você", text }, { who: "Ele", text: result.failed });
-      await say(teach, result.failed);
-      return;
-    }
-    if (result.done) {
-      teach.pendingLink = "";
-      teach.log.push({ who: "Você", text }, { who: "Ele", text: `Feito: ${result.step}` });
-      teach.learned.push({ kind: "PASSO", text: result.step });
-      await saveLearned();
-      return;
-    }
-    if (result.needs_link) {
-      teach.pendingLink = result.needs_link;
-      teach.log.push({ who: "Você", text }, { who: "Ele", text: `Qual é o endereço de ${result.needs_link}? Diga, por exemplo: site ponto com ponto br.` });
-      await say(teach, `Qual é o endereço de ${result.needs_link}?`);
-      return;
-    }
-    await sendTeach(text);
-    const last = teach.log[teach.log.length - 1];
-    if (last.who === "Ele" && last.text.includes("?")) await say(teach, last.text);
-  }
-
-  async function say(teach, text) {
-    teach.speaking = true;
-    await speak(text);
-    teach.speaking = false;
-  }
-
-  // Executa em ordem enquanto o microfone continua ouvindo.
-  async function runQueue(teach) {
-    if (teach.running) return;
-    teach.running = true;
-    while (teach.queue.length && state.teach === teach) {
-      const text = teach.queue.shift();
-      teach.working = text;
-      render();
-      try {
-        await runLiveStep(teach, text);
-      } catch (error) {
-        state.error = error.message || "Falha";
-      }
-      teach.working = "";
-      render();
-    }
-    teach.running = false;
-  }
-
-  async function watchClicks(teach) {
-    let seen = 0;
-    while (teach.live && state.teach === teach) {
-      await new Promise((done) => setTimeout(done, 1500));
-      const steps = (await api(`/api/company-voice/observar/passos?desde=${seen}`).catch(() => ({ passos: [] }))).passos;
-      for (const step of steps) {
-        seen += 1;
-        teach.log.push({ who: "Observei", text: step });
-        teach.learned.push({ kind: "PASSO", text: step });
-      }
-      if (steps.length) { await saveLearned(); render(); }
-    }
-  }
-
+  // A escuta roda no servidor: o painel so acompanha e entrega ao assistente
+  // os pedidos que nao sao imediatos.
   async function teachByVoice() {
     const teach = state.teach;
+    const skill = state.skill;
+    await api("/api/company-voice/ensino/iniciar", { method: "POST", body: { companyId: state.companyId, skillId: skill.id } });
     teach.live = true;
-    teach.audio = new AudioContext();
-    teach.queue = [];
-    await api("/api/company-voice/observar/iniciar", { method: "POST", body: {} }).catch(() => null);
-    watchClicks(teach);
-    try {
-    while (state.teach === teach && teach.live) {
-      setStatus(teach, teach.working ? `Ouvindo enquanto executa: ${teach.working}` : "Ouvindo e olhando sua tela. Diga finalizar aprendizado para encerrar.");
-      const audio = await listen(teach);
-      if (!audio || !teach.live) break;
-      const text = (await transcribe(audio)).trim();
-      if (text.length < 3) continue;
-      if (FINISH_WORDS.test(text)) {
-        teach.log.push({ who: "Você", text });
-        state.notice = "Aprendizado finalizado. Tudo já está registrado na habilidade.";
-        break;
-      }
-      teach.queue.push(text);
-      runQueue(teach);
+    let seen = 0;
+    let handed = 0;
+    let working = Promise.resolve();
+    while (state.teach === teach) {
+      await new Promise((done) => setTimeout(done, 700));
+      const live = await api(`/api/company-voice/ensino/estado?desde=${seen}&assistente=${handed}`);
+      seen = live.total;
+      handed = live.agent_total;
+      teach.level = live.level;
+      teach.status = teach.busy ? "Ouvindo enquanto o assistente executa..." : live.status;
+      live.log.forEach((entry) => {
+        teach.log.push(entry);
+        if (entry.who === "Observei" || entry.text.startsWith("Feito: ")) teach.saved.push({ kind: "PASSO", text: entry.text.replace(/^Feito: /, "") });
+      });
+      if (live.error) state.error = live.error;
+      live.agent.forEach((text) => { working = working.then(() => sendTeach(text, true)).catch((error) => { state.error = error.message; render(); }); });
+      if (live.log.length) state.skill = await api(skillsUrl(`/${skill.id}`));
+      teach.live = live.live;
+      if (!live.live) break;
+      render();
     }
-    } finally {
-      await api("/api/company-voice/observar/parar", { method: "POST", body: {} }).catch(() => null);
-      teach.live = false;
-      teach.status = "";
-      if (teach.stopListening) teach.stopListening();
-      await teach.audio.close();
-    }
+    await working;
+    state.skill = await api(skillsUrl(`/${skill.id}`));
+    state.skills = (await api(skillsUrl())).skills;
+    teach.live = false;
+    teach.status = "";
+    state.notice = "Aprendizado finalizado. Tudo já está registrado na habilidade.";
   }
 
   function stopTeachByVoice() {
-    const teach = state.teach;
-    teach.live = false;
-    if (teach.stopListening) teach.stopListening();
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    teach.status = "";
-    render();
+    api("/api/company-voice/ensino/parar", { method: "POST", body: {} }).catch(() => null);
   }
 
   function teachView() {
@@ -471,7 +317,7 @@
       : button("Ensinar por voz", () => guarded(teachByVoice), true);
     return [row([button("← Sair do ensino", () => { if (teach.live) stopTeachByVoice(); state.teach = null; render(); }), voice]),
       el("p", { textContent: teach.status || "Fale ou clique você mesmo. Ele executa, observa e aprende até você dizer finalizar aprendizado.", style: { fontSize: "12px", color: colors.muted } }),
-      ...(teach.live ? [meter()] : []),
+      ...(teach.live ? [el("div", { textContent: `Microfone: ${Math.round(Math.min(1, (teach.level || 0) * 20) * 100)}%`, style: { fontSize: "12px", color: colors.muted } })] : []),
       ...teach.log.map(lineOf), label("Ou escreva a instrução"), text, row([speakButton, send]),
       ...(learned.length ? [title("Já registrado nesta conversa"), ...learned] : [])];
   }

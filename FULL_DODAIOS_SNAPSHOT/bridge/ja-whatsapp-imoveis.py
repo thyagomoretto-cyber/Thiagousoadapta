@@ -14,26 +14,67 @@ import argparse
 import base64
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 ROOT = Path(os.environ.get("JA_WHATSAPP_RAIZ") or Path.home() / ".dodaios")
 PROFILE = ROOT / "whatsapp-perfil"
 URL = os.environ.get("JA_WHATSAPP_URL") or "https://web.whatsapp.com/"
+DIAGNOSTIC = Path(os.environ.get("JA_KENLO_RELATORIOS") or Path.home() / "Downloads") / "whatsapp-diagnostico.txt"
 LOGIN_TIMEOUT_MS = 180_000
+ALREADY_IN_MS = 45_000
 READY = '#pane-side, [data-testid="chat-list"], [aria-label="Lista de conversas"]'
-MESSAGES = "div[data-id]"
+MESSAGES = "[data-id]"
+SEARCH = (
+    'input[aria-label*="esquis"], input[placeholder*="esquis"], input[aria-label*="earch"], input[placeholder*="earch"], '
+    '[contenteditable="true"][role="textbox"], [data-testid="chat-list-search"]'
+)
+CHATS_WAIT_MS = 45_000
+NEW_PROPERTY = re.compile(r"\bc[oó]digo\b", re.IGNORECASE)
 SCROLLS = 12
 VIEWER_WAIT_MS = 1_500
-OPEN_IMAGE_JS = "img[src^='blob:']"
 
-READ_MESSAGES_JS = """() => [...document.querySelectorAll('div[data-id]')].map((node) => {
-  const texts = [...node.querySelectorAll('span.selectable-text, [data-testid="selectable-text"]')];
-  const images = [...node.querySelectorAll("img[src^='blob:']")].filter((image) => image.naturalWidth > 60 || image.width > 60);
-  const more = (node.innerText.match(/\\+(\\d+)/) || [])[1];
-  return { id: node.getAttribute('data-id'), text: texts.map((item) => item.innerText).join('\\n').trim(), images: images.length, more: more ? Number(more) : 0 };
+# O WhatsApp muda a estrutura da pagina: sem o seletor de texto, usa o texto visivel.
+READ_MESSAGES_JS = """() => {
+  const large = (image) => image.naturalWidth > 60 || image.width > 60;
+  const noise = /^(\\d{1,2}:\\d{2}|encaminhada|forwarded|\\+\\d{1,3}|[\\s\\u200e]*)$/i;
+  return [...(document.querySelector('#main') || document).querySelectorAll('[data-id]')].filter((node) => !node.parentElement.closest('[data-id]')).map((node) => {
+    const texts = [...node.querySelectorAll('span.selectable-text, [data-testid="selectable-text"]')];
+    const images = [...node.querySelectorAll('img')].filter(large);
+    const more = images.length ? (node.innerText.match(/^\\s*\\+(\\d{1,3})\\s*$/m) || [])[1] : 0;
+    const plain = node.innerText.split('\\n').filter((line) => !noise.test(line.trim())).join('\\n').trim();
+    return { id: node.getAttribute('data-id'), text: texts.map((item) => item.innerText).join('\\n').trim() || plain, images: images.length, more: more ? Number(more) : 0 };
+  });
+}"""
+
+SHAPE_JS = """() => ({
+  endereco: location.href.slice(0, 60),
+  tem_main: !!document.querySelector('#main'),
+  tem_lista: !!document.querySelector('#pane-side'),
+  tamanho_texto: document.body.innerText.length,
+  campos: [...document.querySelectorAll('input, textarea, [contenteditable=true]')].map((node) => [node.tagName, node.type || '', node.getAttribute('role'), node.getAttribute('aria-label'), node.getAttribute('placeholder'), node.getAttribute('data-testid')].join(' | ')).slice(0, 15),
+  titulos: document.querySelectorAll('span[title]').length,
+  botoes: [...document.querySelectorAll('[role=button], button')].map((node) => (node.getAttribute('aria-label') || node.innerText || '').slice(0, 30)).filter(Boolean).slice(0, 20),
+  linhas: document.querySelectorAll('[data-id]').length,
+  linhas_div: document.querySelectorAll('div[data-id]').length,
+  papel_linha: document.querySelectorAll('[role=row]').length,
+  texto_selecionavel: document.querySelectorAll('span.selectable-text, [data-testid="selectable-text"]').length,
+  amostra: [...document.querySelectorAll('[data-id]')].slice(-30).map((node) => ({
+    tag: node.tagName,
+    dentro_de_outra: !!node.parentElement.closest('[data-id]'),
+    testes: [...new Set([...node.querySelectorAll('[data-testid]')].map((item) => item.getAttribute('data-testid')))].slice(0, 12),
+    imagens: [...node.querySelectorAll('img')].map((image) => [image.src.slice(0, 5), image.width, image.naturalWidth]).slice(0, 6),
+    fundos: node.querySelectorAll('[style*="background-image"]').length,
+    texto: node.innerText.slice(0, 60).replace(/\\d/g, '9'),
+  })),
 })"""
+FIRST_IMAGE_JS = """(id) => {
+  const node = [...document.querySelectorAll('[data-id]')].find((item) => item.getAttribute('data-id') === id);
+  return [...(node ? node.querySelectorAll('img') : [])].find((image) => image.naturalWidth > 60 || image.width > 60) || null;
+}"""
 
 SAVE_LARGEST_JS = """async () => {
   const area = (image) => { const box = image.getBoundingClientRect(); return box.width * box.height; };
@@ -51,10 +92,12 @@ def group_messages(messages: list[dict]) -> list[dict]:
     """Junta cada texto com as fotos que vieram logo abaixo dele."""
     groups: list[dict] = []
     for message in messages:
-        count = message.get("images", 0) + message.get("more", 0)
+        # O quadro "+4" ja e uma das imagens contadas e esconde mais quatro.
+        more = message.get("more", 0)
+        count = message.get("images", 0) + (more - 1 if more else 0)
         text = (message.get("text") or "").strip()
-        if text and not count:
-            groups.append({"text": text, "first_photo": None, "photos": 0})
+        if text and (not count or NEW_PROPERTY.search(text)):
+            groups.append({"text": text, "first_photo": message["id"] if count else None, "photos": count})
         elif groups and count:
             current = groups[-1]
             current["first_photo"] = current["first_photo"] or message["id"]
@@ -67,21 +110,26 @@ def group_messages(messages: list[dict]) -> list[dict]:
 def browser(playwright):
     PROFILE.mkdir(parents=True, exist_ok=True)
     channel = os.environ.get("JA_WHATSAPP_CANAL", "chrome") or None
-    return playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), accept_downloads=False)
+    return playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), accept_downloads=False, no_viewport=True)
 
 
 def open_group(page, name: str) -> None:
-    box = page.locator('[contenteditable="true"][role="textbox"], [data-testid="chat-list-search"]').first
-    box.click()
-    box.fill(name)
+    """Clica no grupo se ele estiver na lista; se nao, procura pela busca."""
+    group = page.locator(f'span[title="{name}"], span:text-is("{name}")').first
+    try:
+        group.wait_for(state="visible", timeout=CHATS_WAIT_MS)
+    except Exception:
+        page.locator(SEARCH).first.click(timeout=CHATS_WAIT_MS)
+        page.keyboard.type(name, delay=30)
+        group.wait_for(state="visible", timeout=CHATS_WAIT_MS)
+    group.click()
+    page.wait_for_selector(f"#main {MESSAGES}, {MESSAGES}", timeout=30_000)
     page.wait_for_timeout(1500)
-    page.locator(f'span[title="{name}"]').first.click()
-    page.wait_for_selector(MESSAGES, timeout=30_000)
 
 
 def load_history(page) -> None:
     for _ in range(SCROLLS):
-        page.evaluate("() => { const item = document.querySelector('div[data-id]'); if (item) item.scrollIntoView(); }")
+        page.evaluate("() => { const item = document.querySelector('[data-id]'); if (item) item.scrollIntoView(); }")
         page.wait_for_timeout(600)
 
 
@@ -89,8 +137,14 @@ def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
     """Abre a primeira foto e percorre o visualizador para pegar o tamanho real."""
     folder.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
-    page.locator(f'div[data-id="{message_id}"] {OPEN_IMAGE_JS}').first.click()
+    image = page.evaluate_handle(FIRST_IMAGE_JS, message_id).as_element()
+    if not image:
+        return saved
+    image.click()
     page.wait_for_timeout(VIEWER_WAIT_MS)
+    # O visualizador mostra "1 de 7": e o total exato deste album.
+    counter = re.search(r"\b\d+ de (\d+)\b", page.evaluate("() => document.body.innerText"))
+    count = int(counter.group(1)) if counter else count
     seen: set[str] = set()
     for number in range(count):
         photo = page.evaluate(SAVE_LARGEST_JS)
@@ -107,34 +161,58 @@ def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
     return saved
 
 
-def read_group(name: str) -> dict:
-    from playwright.sync_api import sync_playwright
+def diagnose(page) -> None:
+    """Grava a estrutura da pagina, sem conteudo de conversas."""
+    DIAGNOSTIC.parent.mkdir(parents=True, exist_ok=True)
+    DIAGNOSTIC.write_text(json.dumps(page.evaluate(SHAPE_JS), ensure_ascii=False, indent=1), encoding="utf-8")
 
+
+def open_chat(page, name: str) -> None:
+    """Abre o WhatsApp e o grupo; se precisar, espera a leitura do QR Code."""
+    page.goto(URL)
+    try:
+        page.wait_for_selector(READY, timeout=ALREADY_IN_MS)
+    except Exception:
+        print("Leia o QR Code com o celular. Aguardando ate 3 minutos...", flush=True)
+        page.wait_for_selector(READY, timeout=LOGIN_TIMEOUT_MS)
+    try:
+        open_group(page, name)
+    except Exception:
+        diagnose(page)
+        raise SystemExit("WHATSAPP_GRUPO_NAO_ABRIU: veja o diagnostico.") from None
+
+
+def scan(page) -> dict:
+    """Le o grupo ja aberto e coloca na fila o que ainda nao era conhecido."""
     from dodaios.core import property_intake as intake
 
     new, known, photos = 0, 0, 0
+    load_history(page)
+    items = group_messages(page.evaluate(READ_MESSAGES_JS))
+    if not items:
+        diagnose(page)
+    for item in items:
+        key = intake.property_key(item["text"])
+        stored: list[str] = []
+        if item["first_photo"] and not intake.has_photos(key):
+            stored = save_photos(page, item["first_photo"], item["photos"], intake.photo_folder(key))
+        _key, is_new = intake.receive(item["text"], stored)
+        new += is_new
+        known += not is_new
+        photos += len(stored)
+    return {"novos": new, "ja_conhecidos": known, "fotos": photos}
+
+
+def read_group(name: str) -> dict:
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as playwright:
         context = browser(playwright)
         page = context.pages[0] if context.pages else context.new_page()
-        page.goto(URL)
-        try:
-            page.wait_for_selector(READY, timeout=60_000)
-        except Exception as exc:
-            context.close()
-            raise SystemExit("WHATSAPP_SEM_LOGIN: rode com --entrar e leia o QR Code.") from exc
-        open_group(page, name)
-        load_history(page)
-        for item in group_messages(page.evaluate(READ_MESSAGES_JS)):
-            key = intake.property_key(item["text"])
-            stored: list[str] = []
-            if item["first_photo"] and not intake.has_photos(key):
-                stored = save_photos(page, item["first_photo"], item["photos"], intake.photo_folder(key))
-            _key, is_new = intake.receive(item["text"], stored)
-            new += is_new
-            known += not is_new
-            photos += len(stored)
+        open_chat(page, name)
+        result = scan(page)
         context.close()
-    return {"novos": new, "ja_conhecidos": known, "fotos": photos}
+    return result
 
 
 def login() -> None:
@@ -144,8 +222,11 @@ def login() -> None:
         context = browser(playwright)
         page = context.pages[0] if context.pages else context.new_page()
         page.goto(URL)
-        print("Leia o QR Code com o celular. Aguardando ate 3 minutos...", flush=True)
-        page.wait_for_selector(READY, timeout=LOGIN_TIMEOUT_MS)
+        try:
+            page.wait_for_selector(READY, timeout=ALREADY_IN_MS)
+        except Exception:
+            print("Leia o QR Code com o celular. Aguardando ate 3 minutos...", flush=True)
+            page.wait_for_selector(READY, timeout=LOGIN_TIMEOUT_MS)
         time.sleep(5)
         context.close()
     print("WHATSAPP_LOGIN=OK")

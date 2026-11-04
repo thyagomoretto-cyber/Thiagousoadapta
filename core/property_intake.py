@@ -32,6 +32,8 @@ _TYPES: Final[tuple[tuple[str, str, str], ...]] = (
     ("pavilhao", "comercial", r"\b(pavilhao|galpao|deposito)\b"),
     ("terreno", "comercial", r"\b(terreno|lote|area de terras)\b"),
 )
+# Fichas sem o nome do tipo: estes detalhes so aparecem em pavilhoes.
+_PAVILION_HINT = re.compile(r"\b(docas?|rampas? de acesso|pe[\s-]direito)\b")
 _NOT_CONDOMINIUM = re.compile(r"\b(sem condominio|nao e condominio|nao tem condominio|fora de condominio|isento de condominio|rua aberta)\b")
 _CONDOMINIUM = re.compile(r"\b(condominio|cond\.|residencial fechado|portaria 24)\b")
 _CODE = re.compile(r"\b(?:codigo|cod|referencia|ref)\b\s*[:#.\-]?\s*([a-z0-9-]*\d[a-z0-9-]*)\b")
@@ -60,19 +62,16 @@ def classify(text: str) -> dict[str, Any]:
         kind, purpose = candidates[0]
     elif candidates:
         doubts.append(f"Mais de um tipo no texto: {', '.join(sorted(kinds))}")
+    elif _PAVILION_HINT.search(folded):
+        kind, purpose = "pavilhao", "comercial"
     else:
         doubts.append("Tipo do imovel nao identificado")
     if re.search(r"\bcomercial\b", lines[0] if lines else "") and kind in ("casa", "apartamento"):
         purpose = "comercial"
     if re.search(r"\bresidencial\b", lines[0] if lines else "") and kind == "terreno":
         purpose = "residencial"
-    condominium: bool | None = None
-    if _NOT_CONDOMINIUM.search(folded):
-        condominium = False
-    elif _CONDOMINIUM.search(folded):
-        condominium = True
-    else:
-        doubts.append("Nao diz se esta em condominio")
+    # Se a ficha nao fala em condominio, o imovel nao esta em um.
+    condominium = bool(_CONDOMINIUM.search(folded)) and not _NOT_CONDOMINIUM.search(folded)
     return {"tipo": kind, "finalidade": purpose, "condominio": condominium, "duvidas": doubts}
 
 
@@ -120,6 +119,20 @@ def photo_folder(key: str) -> Path:
     return _root() / "fotos" / re.sub(r"[^a-z0-9-]", "-", key)
 
 
+def get(key: str) -> dict[str, Any] | None:
+    with _LOCK:
+        return _load().get(key)
+
+
+def update(key: str, **fields: Any) -> dict[str, Any]:
+    """Guarda dados extras do imovel, como a ordem final das fotos."""
+    with _LOCK:
+        ledger = _load()
+        ledger[key].update(fields)
+        _save(ledger)
+        return ledger[key]
+
+
 def has_photos(key: str) -> bool:
     item = _load().get(key)
     return bool(item and item.get("fotos"))
@@ -135,6 +148,9 @@ def receive(text: str, photos: list[str] | None = None) -> tuple[str, bool]:
             merged = sorted({*known.get("fotos", []), *(photos or [])})
             if merged != known.get("fotos", []):
                 known["fotos"] = merged
+                # Fotos que chegaram depois do texto liberam o imovel parado.
+                if known["status"] == REVIEW and not known.get("duvidas"):
+                    known["status"] = PENDING
                 _save(ledger)
             return key, False
         info = classify(text)
@@ -150,10 +166,16 @@ def receive(text: str, photos: list[str] | None = None) -> tuple[str, bool]:
     return key, True
 
 
+def _queue_order(item: dict[str, Any]) -> tuple[int, str]:
+    """Sempre em sequencia: codigo 2 antes do 3; sem codigo, por ultimo."""
+    code = re.fullmatch(r"codigo-(\d+)", item["chave"])
+    return int(code.group(1)) if code else 10**9, item["recebido"]
+
+
 def next_pending() -> dict[str, Any] | None:
     with _LOCK:
         pending = [item for item in _load().values() if item["status"] == PENDING]
-    return min(pending, key=lambda item: item["recebido"]) if pending else None
+    return min(pending, key=_queue_order) if pending else None
 
 
 def mark(key: str, status: str, note: str = "") -> dict[str, Any]:

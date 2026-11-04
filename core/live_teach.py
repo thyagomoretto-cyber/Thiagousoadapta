@@ -27,6 +27,7 @@ _SPEECH_LEVEL: Final[float] = 0.015
 _END_SILENCE_S: Final[float] = 0.8
 _MAX_SPEECH_S: Final[float] = 30.0
 _MIN_SPEECH_S: Final[float] = 0.25
+_NOTE = re.compile(r"^\W*(?:agora\s+)?(?:anote|anota|lembre|lembra|aprenda|aprende|registre|registra)\s+(?:que\s+)?(.+)$", re.I)
 _FINISH = re.compile(r"\b(finalizar|finaliza|encerrar|terminar)\s+(o\s+|a\s+)?aprend", re.I)
 
 
@@ -179,6 +180,17 @@ class LiveTeach:
         if self.live:
             self._speak(text)
 
+    def _learn_decision(self, decision: str) -> None:
+        """Guarda a frase do dono como ela foi dita, sem passar pelo modelo."""
+        skill = company_skills.get_skill(self.company_id, self.skill_id)
+        known = skill.get("conditions") or []
+        if decision not in known:
+            company_skills.update_skill(
+                self.company_id, self.skill_id, {"conditions": [*known, decision]}, "Decisao ensinada por voz"
+            )
+        self._note("Observei", f"Decisão: {decision}")
+        self._speak("Anotado.")
+
     def _speak(self, text: str) -> None:
         self.muted = True
         try:
@@ -241,12 +253,18 @@ class LiveTeach:
         if _FINISH.search(text):
             self.stop()
             return
+        note = _NOTE.match(text)
+        if note:
+            self._learn_decision(note.group(1).strip().rstrip("."))
+            return
         if self.pending_link and re.search(r"\b(cancela|cancelar|deixa|esquece)\b", text, re.I):
             self.pending_link = ""
             self._note("Ele", "Certo, deixei de lado.")
             self._speak("Certo.")
             return
         result = live_actions.act(text, self.pending_link)
+        if not result.get("needs_link"):
+            self.pending_link = ""
         if result.get("failed"):
             self._note("Ele", result["failed"])
             self._speak(result["failed"])

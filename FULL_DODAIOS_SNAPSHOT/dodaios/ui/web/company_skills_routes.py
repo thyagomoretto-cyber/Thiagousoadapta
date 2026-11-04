@@ -11,6 +11,8 @@ from dodaios.core import company_skills as store
 
 from .companies_routes import _read_state
 
+KENLO_WAIT_S = 1800
+
 router = APIRouter(prefix="/api/companies/{company_id}/skills", tags=["company-skills"])
 
 voice_router = APIRouter(prefix="/api/company-voice", tags=["company-skills"])
@@ -223,6 +225,16 @@ class GroupRead(BaseModel):
     grupo: str = Field(min_length=1, max_length=240)
 
 
+class PhotoOrder(BaseModel):
+    ordem: list[str]
+    ambientes: dict[str, str] = Field(default_factory=dict)
+
+
+class KenloRun(BaseModel):
+    key: str = Field(min_length=1, max_length=120)
+    salvar: bool = False
+
+
 @voice_router.post("/imoveis/ler")
 async def read_whatsapp_group(body: GroupRead) -> dict:
     """Le o grupo do WhatsApp no Chrome separado e devolve o resumo."""
@@ -256,6 +268,96 @@ def properties_summary() -> dict:
     from dodaios.core import property_intake as intake
 
     return {**intake.summary(), "proximo": intake.next_pending()}
+
+
+def _ordered_photos(item: dict) -> dict:
+    """Sequencia das fotos: a escolhida pelo dono ou a calculada agora."""
+    from pathlib import Path
+
+    from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision
+    from dodaios.core.property_sheet import parse_sheet
+
+    kind = order.sequence_kind(item["tipo"], item["condominio"])
+    paths = [Path(path) for path in item.get("fotos", []) if Path(path).exists()]
+    photos = vision.classify_all(paths, kind, plan.load_rules()["empresa"])
+    result = order.arrange(kind, photos, int(parse_sheet(item["texto"])["suites"] or 0))
+    chosen = item.get("ordem_fotos") or []
+    if chosen:
+        rank = {path: index for index, path in enumerate(chosen)}
+        result["ordem"].sort(key=lambda photo: rank.get(photo["caminho"], len(rank)))
+    fields = ("ambiente", "confianca", "fonte")
+    return {"ordem": [{"nome": Path(photo["caminho"]).name, **{name: photo[name] for name in fields}} for photo in result["ordem"]],
+            "repetidas": [Path(photo["caminho"]).name for photo in result["repetidas"]],
+            "avisos": result["avisos"] + result["duvidas"], "ambientes": list(order.SEQUENCES[kind])}
+
+
+@voice_router.get("/imoveis/{key}/fotos")
+def property_photos(key: str) -> dict:
+    from dodaios.core import property_intake as intake
+
+    item = intake.get(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="Imovel nao encontrado")
+    return {"imovel": item, **_ordered_photos(item)}
+
+
+@voice_router.get("/imoveis/{key}/foto/{name}")
+def property_photo(key: str, name: str):
+    from pathlib import Path
+
+    from fastapi.responses import FileResponse
+
+    from dodaios.core import property_intake as intake
+
+    item = intake.get(key)
+    match = next((path for path in (item or {}).get("fotos", []) if Path(path).name == name), None)
+    if not match or not Path(match).exists():
+        raise HTTPException(status_code=404, detail="Foto nao encontrada")
+    return FileResponse(match)
+
+
+@voice_router.post("/imoveis/{key}/fotos")
+def save_photo_order(key: str, body: PhotoOrder) -> dict:
+    """Guarda a ordem final e aprende os ambientes corrigidos pelo dono."""
+    from pathlib import Path
+
+    from dodaios.core import cadastro_plan as plan, photo_order as order, property_intake as intake
+
+    item = intake.get(key)
+    if not item:
+        raise HTTPException(status_code=404, detail="Imovel nao encontrado")
+    by_name = {Path(path).name: path for path in item.get("fotos", [])}
+    if any(name not in by_name for name in [*body.ordem, *body.ambientes]):
+        raise HTTPException(status_code=422, detail="Foto desconhecida")
+    company = plan.load_rules()["empresa"]
+    for name, room in body.ambientes.items():
+        order.correct(company, order.fingerprint(Path(by_name[name]))["sha"], room)
+    intake.update(key, ordem_fotos=[by_name[name] for name in body.ordem])
+    return {"ok": True}
+
+
+@voice_router.post("/imoveis/kenlo")
+async def register_on_kenlo(body: KenloRun) -> dict:
+    """Abre o agente e responde assim que ele informa o resultado."""
+    import asyncio
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    script = Path.home() / ".dodaios" / "bridge" / "ja-kenlo-cadastro.py"
+    log = Path(tempfile.mkstemp(prefix="ja-kenlo-", suffix=".log")[1])
+    command = [sys.executable, str(script), "--imovel", body.key, *(["--salvar"] if body.salvar else [])]
+    with log.open("wb") as output:
+        process = await asyncio.create_subprocess_exec(*command, cwd=str(script.parents[1]), stdout=output, stderr=asyncio.subprocess.STDOUT)
+    for _ in range(KENLO_WAIT_S):
+        text = log.read_text("utf-8", "replace")
+        found = next((line for line in text.splitlines() if line.startswith("KENLO_RESULTADO=")), "")
+        if found:
+            return {"resultado": found.split("=", 1)[1]}
+        if process.returncode is not None:
+            raise HTTPException(status_code=500, detail=text[-400:] or "O agente parou sem resultado")
+        await asyncio.sleep(1)
+    raise HTTPException(status_code=504, detail="O cadastro demorou demais")
 
 
 @voice_router.post("/imoveis/{key}/situacao")

@@ -38,11 +38,15 @@ _NOT_A_SITE: Final[frozenset[str]] = frozenset(
     "formulario opcao item lista cadastro".split()
 )
 _CLICK = re.compile(
-    _POLITE + r"(?:clique|clica|clicar|aperte|aperta|apertar|pressione|selecione|escolha)\s+"
+    _POLITE + r"(?:clique|clica|clicar|clic|click|clik|aperte|aperta|apertar|pressione|selecione|escolha)\s+"
     r"(?:(?:em|no|na|nos|nas|sobre|o|a|os|as)\s+)*"
-    r"(?:(?:botao|link|aba|menu|opcao|campo|icone|item)\s+)?(?:(?:do|da|de)\s+)?(.+)$"
+    r"(?:(?:botao|link|aba|guia|menu|opcao|campo|icone|item|grupo|conversa|contato)\s+)?(?:(?:do|da|de|chamado|chamada)\s+)?(.+)$"
 )
-_HERE = re.compile(_POLITE + r"(?:clique|clica|clicar)\s+(?:aqui|neste lugar|nesse lugar|onde esta o mouse)$")
+_HERE = re.compile(_POLITE + r"(?:clique|clica|clicar|clic|click|clik)\s+(?:aqui|neste lugar|nesse lugar|onde esta o mouse)$")
+_TAB = re.compile(_POLITE + r"(?:abra|abre|abrir|va|vai|ir|entre|entra)\s+(?:(?:em|no|na|para|pra|a|o)\s+)*(?:aba|guia)\s+(?:(?:do|da|de|que esta escrito|escrito|chamada)\s+)*(.+)$")
+_NAMED = re.compile(r"\b(?:chamad[oa]|de nome|escrito)\s+([^.,!?]+)", re.I)
+_CLICK_WORD = re.compile(r"\b(clique|clica|clicar|clic|click|abrir|abra|abre|aba|guia)\b", re.I)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _TYPE = re.compile(r"^(?:por favor |agora |entao |depois |e )*(?:digite|digita|digitar|escreva|escreve|escrever)\s+(.+)$", re.I)
 _KEY = re.compile(_POLITE + r"(?:aperte|aperta|apertar|pressione|tecle)\s+(?:a\s+tecla\s+|o\s+)?(enter|tab|esc|espaco|apagar|baixo|cima|esquerda|direita)$")
 _SCROLL = re.compile(_POLITE + r"(?:role|rola|rolar|desca|suba|desce|sobe)\b.*?(baixo|cima)?$")
@@ -145,15 +149,31 @@ def _open(*arguments: str) -> None:
 
 
 def act(text: str, pending_link: str = "") -> dict[str, Any]:
-    """Executa o passo se for imediato; ``done`` falso manda para o assistente."""
+    """Executa o primeiro comando de uma fala; o resto segue para o assistente."""
     if sys.platform != "darwin":
         return {"done": False}
+    if pending_link and not _url_in(text):
+        if "ponto" in _fold(text):
+            return {"done": False, "needs_link": pending_link, "again": True}
+        pending_link = ""
+    named = _NAMED.search(text)
+    if named and _CLICK_WORD.search(text):
+        text = f"clique em {named.group(1)}"
+    for sentence in [part for part in _SENTENCE.split(text.strip()) if part]:
+        result = _act_on(sentence, pending_link)
+        if result.get("done") or result.get("needs_link"):
+            return result
+    return {"done": False}
+
+
+def _act_on(text: str, pending_link: str) -> dict[str, Any]:
     url = _url_in(text)
     if pending_link and url:
         save_link(pending_link, url)
     folded = _fold(text)
-    if pending_link and not url:
-        return {"done": False, "needs_link": pending_link, "again": True}
+    tab = _TAB.match(folded)
+    if tab and not url:
+        return _screen_step(f"clique em {tab.group(1)}", f"clique em {_fold(tab.group(1))}") or {"done": False}
     go = _GO_VERB.match(folded) or _site_named(_GO_PLAIN.match(folded))
     if url and (pending_link or go or _OPEN_VERB.match(folded)):
         _open("-a", _BROWSER, url)

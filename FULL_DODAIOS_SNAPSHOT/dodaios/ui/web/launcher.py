@@ -1198,7 +1198,7 @@ async def _watch_background_service(
         if loop.time() < next_idle_check:
             continue
         next_idle_check = loop.time() + idle_every
-        if bg.work_from_state(state):
+        if bg.keep_running_requested() or bg.work_from_state(state):
             strikes = 0
             continue
         strikes += 1

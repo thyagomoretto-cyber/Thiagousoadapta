@@ -76,6 +76,8 @@
 
   const TEACH_RULES = "Estou ensinando esta tarefa. Execute cada instrucao com as ferramentas, na tela, e pergunte quando tiver duvida. Prefira localizar elementos por texto, rotulo e estrutura da pagina; use coordenadas so como ultimo recurso. Nunca adivinhe link, nome, senha ou dado: se faltar algo, pare e faca uma pergunta curta. Esta e uma conversa por voz: fale de forma natural, em poucas frases, como nas nossas conversas normais, e responda tambem ao que eu comentar. Quando o caminho mudar conforme o caso, como um imovel comercial ou residencial, pergunte como identificar e registre a decisao. No fim de cada resposta, liste o que aprendeu em linhas neste formato exato: PASSO: texto / REGRA: texto / CONDICAO: se tal caso, entao fazer tal coisa / EXCECAO: texto / VALIDAR: texto / EXEMPLO: situacao => resultado.";
 
+  const VOICE_RULES = "Estou ensinando por voz. Os comandos de tela sao feitos por outro modulo, entao aqui voce so conversa comigo, em poucas frases. Nunca diga que abriu, clicou, digitou ou fez algo, porque voce nao opera a tela nesta conversa. Se eu pedir uma acao, responda: Nao consegui executar, diga clique em e o texto exato da tela. Nunca adivinhe link, nome ou dado; se faltar algo, faca uma pergunta curta.";
+
   async function sendTeach(text, alreadyLogged) {
     const teach = state.teach;
     if (!alreadyLogged) teach.log.push({ who: "Você", text });
@@ -97,7 +99,7 @@
     const skill = state.skill;
     const first = !teach.session;
     if (first) teach.session = await startSession(skill);
-    const context = first ? `${TEACH_RULES}\nHabilidade: ${skill.name}. Empresa: ${skill.company}. Passos ja aprendidos: ${skill.steps.join("; ") || "nenhum"}.\n\n` : "";
+    const context = first ? `${teach.live ? VOICE_RULES : TEACH_RULES}\nHabilidade: ${skill.name}. Empresa: ${skill.company}. Passos ja aprendidos: ${skill.steps.join("; ") || "nenhum"}.\n\n` : "";
     const sent = await api(`/api/agent-chat/sessions/${teach.session}/messages`, { method: "POST", body: { text: context + text } });
     for (let tries = 0; tries < 300; tries += 1) {
       await new Promise((done) => setTimeout(done, 2000));
@@ -113,9 +115,10 @@
       if (events.some((event) => event.kind === "turn_finished" && ours(event))) {
         const reply = events.filter((event) => event.kind === "assistant_text" && ours(event)).map((event) => event.payload.text).join("\n");
         teach.log.push({ who: "Ele", text: reply || "Terminou sem resposta." });
-        reply.split("\n").forEach((line) => {
-          const found = line.match(/^\W*(PASSO|REGRA|CONDICAO|EXCECAO|VALIDAR|EXEMPLO):\s*(.+)$/);
-          if (found) teach.learned.push({ kind: found[1], text: found[2].trim() });
+        // Por voz, so passos executados ou observados entram na habilidade.
+        if (!teach.live) reply.split("\n").forEach((line) => {
+          const found = line.match(/^\W*(PASSO|REGRA|CONDICAO|EXCECAO|VALIDAR|EXEMPLO):\W*(.+)$/);
+          if (found && !/\*\*/.test(found[2])) teach.learned.push({ kind: found[1], text: found[2].trim() });
         });
         // Registra a cada passo, para nada se perder se o ensino parar no meio.
         if (teach.learned.length) await saveLearned();
@@ -188,6 +191,53 @@
   async function openReview() {
     state.review = (await api("/api/company-voice/imoveis")).revisar[0] || null;
     if (!state.review) state.notice = "Nenhum imóvel para revisar.";
+  }
+
+  async function openProperty() {
+    const item = (await api("/api/company-voice/imoveis")).proximo;
+    if (!item) { state.notice = "Nenhum imóvel na fila."; return; }
+    state.notice = "Analisando as fotos...";
+    render();
+    const data = await api(`/api/company-voice/imoveis/${encodeURIComponent(item.chave)}/fotos`);
+    state.property = { ...data, changed: {} };
+    state.notice = "";
+  }
+
+  async function sendToKenlo(save) {
+    const item = state.property;
+    const path = `/api/company-voice/imoveis/${encodeURIComponent(item.imovel.chave)}/fotos`;
+    await api(path, { method: "POST", body: { ordem: item.ordem.map((photo) => photo.nome), ambientes: item.changed } });
+    item.changed = {};
+    state.notice = "Abrindo o Kenlo...";
+    render();
+    const reply = await api("/api/company-voice/imoveis/kenlo", { method: "POST", body: { key: item.imovel.chave, salvar: save } });
+    state.notice = `Kenlo: ${reply.resultado}`;
+  }
+
+  function propertyView() {
+    const item = state.property;
+    const key = encodeURIComponent(item.imovel.chave);
+    const move = (index, step) => {
+      const target = index + step;
+      if (target < 0 || target >= item.ordem.length) return;
+      [item.ordem[index], item.ordem[target]] = [item.ordem[target], item.ordem[index]];
+      render();
+    };
+    const tile = (photo, index) => {
+      const room = el("select", { style: fieldStyle }, item.ambientes.map((name) => el("option", { value: name, textContent: name.replace(/_/g, " ") })));
+      room.value = photo.ambiente;
+      room.addEventListener("change", () => { photo.ambiente = room.value; item.changed[photo.nome] = room.value; });
+      return el("div", { style: { width: "170px", fontSize: "12px" } }, [
+        el("img", { src: `/api/company-voice/imoveis/${key}/foto/${encodeURIComponent(photo.nome)}`, alt: photo.ambiente, style: { width: "100%", height: "110px", objectFit: "cover", borderRadius: "6px" } }),
+        el("div", { textContent: `${index + 1}${index === 0 ? " · capa" : ""}${photo.confianca < 0.6 ? " · conferir" : ""}`, style: { margin: "4px 0", color: colors.muted } }),
+        room, row([button("◀", () => move(index, -1)), button("▶", () => move(index, 1))])]);
+    };
+    return [row([button("← Voltar", () => { state.property = null; render(); })]),
+      title("Fotos e cadastro"), el("div", { textContent: item.imovel.texto, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
+      ...item.avisos.map((text) => el("div", { textContent: `• ${text}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })),
+      ...(item.repetidas.length ? [el("div", { textContent: `Repetidas, fora do anúncio: ${item.repetidas.join(", ")}`, style: { marginTop: "6px", fontSize: "12px", color: colors.muted } })] : []),
+      el("div", { style: { display: "flex", flexWrap: "wrap", gap: "12px", marginTop: "12px" } }, item.ordem.map(tile)),
+      row([button("Preencher no Kenlo sem salvar", () => guarded(() => sendToKenlo(false)), true), button("Cadastrar e salvar", () => guarded(() => sendToKenlo(true)))])];
   }
 
   function reviewView() {
@@ -285,7 +335,7 @@
         teach.log.push(entry);
         if (entry.who === "Observei" || entry.text.startsWith("Feito: ")) teach.saved.push({ kind: "PASSO", text: entry.text.replace(/^Feito: /, "") });
       });
-      if (live.error) state.error = live.error;
+      state.error = live.error || "";
       live.agent.forEach((text) => { working = working.then(() => sendTeach(text, true)).catch((error) => { state.error = error.message; render(); }); });
       if (live.log.length) state.skill = await api(skillsUrl(`/${skill.id}`));
       teach.live = live.live;
@@ -449,7 +499,7 @@
     return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Ensinar conversando", teach, true), button("Testar habilidade", test)]),
       row([button(state.reading ? "Lendo o grupo..." : "Ler grupo do WhatsApp", askGroup),
         state.batch ? button("Parar lote", () => { state.batch.stop = true; render(); }) : button("Cadastrar os novos", () => guarded(() => runBatch(skill))),
-        button("Revisar imóveis", () => guarded(openReview))]),
+        button("Revisar imóveis", () => guarded(openReview)), button("Fotos e Kenlo", () => guarded(openProperty))]),
       ...(state.batch ? [el("div", { textContent: `Cadastrando: ${state.batch.current || "..."} (${state.batch.done} feitos)`, style: { marginTop: "10px", fontSize: "12px", color: colors.muted } })] : []),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
       label("Nome"), form.name, label("Quando usar"), form.whenToUse, label("Passos, um por linha"), form.steps,
@@ -464,7 +514,7 @@
 
   function render() {
     if (!panel) return;
-    const body = state.asking ? askView() : state.review ? reviewView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
+    const body = state.asking ? askView() : state.review ? reviewView() : state.property ? propertyView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
     panel.replaceChildren(
       el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
         el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),

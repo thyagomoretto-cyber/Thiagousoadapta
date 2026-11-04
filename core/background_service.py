@@ -46,6 +46,10 @@ HANDOVER_POLL_S = 0.5
 IDLE_CHECK_S = 300.0
 #: Consecutive empty checks before the service exits on its own.
 IDLE_STRIKES = 2
+#: Com este arquivo, o servico fica ligado mesmo sem trabalho. Quem reinicia o
+#: servico por fora, como um supervisor, precisa disto: sem ele, o servico sai
+#: por ociosidade, volta e reabre os auxiliares, tirando o foco do app em uso.
+KEEP_RUNNING_FILE = Path.home() / ".dodaios" / "bridge" / "ja-manter-ligado"
 #: How long the desktop waits for the service to hand back before stopping it.
 TAKEOVER_WAIT_S = 45.0
 #: How long a handing-back service lets routine runs in flight finish.
@@ -173,6 +177,10 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(tmp, path)
+
+
+def keep_running_requested() -> bool:
+    return KEEP_RUNNING_FILE.exists()
 
 
 def write_marker(port: int, *, persistent: bool = False) -> None:

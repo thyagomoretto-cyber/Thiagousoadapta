@@ -47,8 +47,25 @@ def _area(folded: str, words: str) -> str:
     return found.group(1).rstrip(".,") if found else ""
 
 
+def _labeled(lines: list[str], names: str) -> str:
+    """Valor de uma linha 'Rotulo: valor' da ficha."""
+    for line in lines:
+        found = re.match(rf"(?:{names})\s*:\s*(.+)$", _fold(_clean(line)))
+        if found:
+            return _clean(line)[found.start(1):].strip()
+    return ""
+
+
+def _labeled_area(folded: str, names: str) -> str:
+    found = re.search(rf"\b(?:{names})[^\d\n]{{0,16}}(\d[\d.,]*)\s*m", folded)
+    return found.group(1).rstrip(".,") if found else ""
+
+
 def _place(lines: list[str]) -> tuple[str, str]:
-    """Bairro e cidade: a linha do alfinete, ou a primeira com virgula."""
+    """Bairro e cidade: rotulos, a linha do alfinete, ou a primeira com virgula."""
+    labeled = _labeled(lines, "bairr?o|bairo"), _labeled(lines, "cidade")
+    if labeled[1]:
+        return labeled
     for line in lines:
         if "\U0001F4CD" in line:
             parts = [part.strip() for part in re.sub(r"\U0001F4CD|️", "", line).split(",") if part.strip()]
@@ -67,7 +84,7 @@ def _place(lines: list[str]) -> tuple[str, str]:
 
 def _address(lines: list[str]) -> tuple[str, str]:
     for line in lines:
-        text = _clean(line)
+        text = re.sub(r"^endere[cç]o\s*:\s*", "", _clean(line), flags=re.IGNORECASE)
         if _STREET.match(text):
             found = _NUMBER.match(text)
             return (found.group(1).strip(), found.group(2)) if found else (text, "")
@@ -98,13 +115,19 @@ def parse_sheet(text: str) -> dict[str, Any]:
     apartment = re.search(r"\b(?:apto\.?|ap\.|apartamento\s+n[ºo°.]*)\s*(?:n[ºo°.]*\s*)?(\d{1,5})\b", folded)
     lot = re.search(r"\blote\s*:?\s*([a-z0-9-]+)", folded)
     block = re.search(r"\bquadra\s*:?\s*([a-z0-9-]+)", folded)
-    built = _area(folded, "area util|util|privativ[ao]|construid[ao]|area construida")
+    built = _area(folded, "area util|util|privativ[ao]|construid[ao]|area construida") or _labeled_area(folded, "area (?:util|construida|privativa)")
+    condo = _labeled(lines, "condominio")
+    covered = re.search(r"\b(\d{1,3})\s+vagas?\s+cobertas?\b", folded)
+    open_air = re.search(r"\b(\d{1,3})\s+vagas?\s+descobertas?\b", folded)
     counts = {}
     for field, pattern in _COUNTS.items():
         found = re.search(rf"\b(\d{{1,3}})\s+{pattern}\b", folded)
         counts[field] = found.group(1) if found else ""
     return {
         "codigo": code.group(1) if code else "",
+        "condominio_nome": "" if re.search(r"\d|r\$", _fold(condo)) else condo,
+        "vagas_cobertas": covered.group(1) if covered else "",
+        "vagas_descobertas": open_air.group(1) if open_air else "",
         "bairro": neighborhood,
         "cidade": city,
         "logradouro": street,
@@ -113,7 +136,7 @@ def parse_sheet(text: str) -> dict[str, Any]:
         "lote": lot.group(1) if lot else "",
         "quadra": block.group(1) if block else "",
         "area_construida": built,
-        "area_terreno": _area(folded, "de terreno|terreno|area total|total"),
+        "area_terreno": _area(folded, "de terreno|terreno|area total|total") or _labeled_area(folded, "area (?:do )?terreno|area total"),
         **counts,
         "locacao": _money(folded, "locacao|aluguel"),
         "venda": _money(folded, "venda|valor de venda"),

@@ -11,13 +11,16 @@ import re
 from datetime import date
 from typing import Any, Final
 
+from dodaios.core.property_sheet import _fold
+
 NEW_PROPERTY_URL: Final[str] = "https://imob.valuegaia.com.br/admin/default.aspx#/modules/imoveis_beta/imovel-novo.aspx?acao=incluir"
 KIND_LABELS: Final[dict[str, tuple[str, str]]] = {
     "pavilhao": ("Comercial", "Pavilhão"), "apartamento": ("Residencial", "Apartamento"), "casa": ("Residencial", "Casa"),
     "sala": ("Comercial", "Sala"), "loja": ("Comercial", "Loja"), "predio": ("Comercial", "Prédio"), "terreno": ("Comercial", "Terreno"),
 }
 AD_REQUEST: Final[str] = ("Gere um texto para utilizarmos como anuncio no meu site deste imovel, nao coloque endereco, valor e proprietario. "
-                          "Neste caso e {kind} para {purpose}. Use somente os dados abaixo, sem inventar nada e sem marcacao.")
+                          "Neste caso e {kind} para {purpose}. Comece pelo maior diferencial e destaque todos os pontos fortes, em texto persuasivo e facil de ler. "
+                          "Use somente os dados abaixo, sem inventar nada e sem marcacao.")
 
 
 def rules_path():
@@ -39,6 +42,62 @@ def _fixed(rules: dict[str, Any], section: str, *fields: tuple[str, str]) -> lis
     return [_step(section, field, how, values[field]) for field, how in fields if field in values]
 
 
+def condo_rules(sheet: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
+    """O que a empresa ja ensinou sobre o condominio da ficha."""
+    name = _fold(sheet.get("condominio_nome", ""))
+    return next((value for key, value in rules.get("condominios", {}).items() if name and _fold(key) in name), {})
+
+
+def complete_sheet(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
+    """Completa a ficha com o que vale sempre naquele condominio."""
+    condo = condo_rules(sheet, rules)
+    if not condo:
+        return sheet
+    filled = {**sheet}
+    for field in ("andares", "suites", "banheiros"):
+        filled[field] = sheet[field] or condo.get(field, "")
+    by_area = condo.get("dormitorios_por_area")
+    if not sheet["dormitorios"] and by_area:
+        area = float((sheet["area_construida"] or "0").replace(".", "").replace(",", "."))
+        filled["dormitorios"] = by_area["acima"] if area > by_area["limite"] else by_area["ate"]
+    return filled
+
+
+def floor_of(apartment: str) -> str:
+    """Apartamento 404 fica no 4o andar; 1203 no 12o."""
+    return apartment[:-2].lstrip("0") if len(apartment) >= 3 else ""
+
+
+def _apartment_details(sheet: dict[str, Any], rules: dict[str, Any], check: list[str]) -> list[dict[str, Any]]:
+    section = "Detalhes"
+    general = rules.get("apartamento", {})
+    condo = condo_rules(sheet, rules)
+    built = sheet["area_construida"] or sheet["area_terreno"]
+    boxes = list(dict.fromkeys([*general.get("caixas", []), *condo.get("caixas", [])]))
+    steps = [_step(section, "Área total:", "texto", sheet["area_terreno"] or built), _step(section, "*Área útil:", "texto", built),
+             _step(section, "Altura do pé direito", "texto", sheet["pe_direito"] or general.get("pe_direito", ""))]
+    steps += [_step(section, name, "marcar", True) for name in boxes]
+    if sheet["mobiliado"]:
+        steps.append(_step(section, "Mobiliado", "marcar", True))
+    steps += [_step(section, "Nº de andares", "texto", sheet["andares"]), _step(section, "Nº do andar", "texto", floor_of(sheet["apartamento"])),
+              _step(section, "Nº de salas", "texto", general.get("salas", "")), _step(section, "*Dormitórios", "texto", sheet["dormitorios"]),
+              _step(section, "Suites", "lista", sheet["suites"]), _step(section, "Nº de banheiros", "texto", sheet["banheiros"])]
+    if not condo:
+        check.append("Condomínio sem regras salvas: confira nas fotos elevador, lazer, gás e demais caixas.")
+    steps += [_step(section, name, "marcar", True) for name in condo.get("piso") or general.get("piso", [])]
+    return [step for step in steps if step["valor"] != "" or step["campo"] == "*Dormitórios"]
+
+
+def _parking(sheet: dict[str, Any], rules: dict[str, Any]) -> list[dict[str, Any]]:
+    if not sheet["vagas"]:
+        return []
+    section = "Detalhes"
+    covered = sheet["vagas_cobertas"] or "0"
+    open_air = sheet["vagas_descobertas"] or ("0" if sheet["vagas_cobertas"] else sheet["vagas"])
+    return [_step(section, "Vagas cobertas", "texto", covered), _step(section, "Vagas descobertas", "texto", open_air),
+            *_fixed(rules, section, ("Tipo de vaga", "lista"), ("Característica da vaga", "lista"))]
+
+
 def _complement(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any]) -> str:
     if item.get("tipo") == "apartamento" and sheet["apartamento"]:
         return sheet["apartamento"]
@@ -50,6 +109,7 @@ def _complement(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, An
 def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any], ad_text: str, today: date | None = None) -> dict[str, Any]:
     """Campos em ordem de tela e a lista do que o dono precisa conferir."""
     today = today or date.today()
+    sheet = complete_sheet(item, sheet, rules)
     fixed = rules["fixos"]
     minimum = fixed["valor_minimo"]
     check: list[str] = []
@@ -68,11 +128,15 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
         *_fixed(rules, "Proprietário", ("*Mídia de origem:", "lista")),
         _step("Estrutura", "*Finalidade:", "lista", purpose),
         _step("Estrutura", "*Tipo:", "lista", kind_label),
-        _step("Localização do imóvel", "Cidade:", "lista", sheet["cidade"]),
-        _step("Localização do imóvel", "Logradouro:", "logradouro", {"rua": sheet["logradouro"], "bairro": sheet["bairro"]}),
-        _step("Localização do imóvel", "Número", "texto", sheet["numero"]),
-        _step("Localização do imóvel", "Complemento:", "texto", _complement(item, sheet, rules)),
     ]
+    if sheet["condominio_nome"]:
+        # Achando o condominio, o Kenlo preenche o endereco sozinho.
+        steps.append(_step("Estrutura", "Nome do condomínio/edifício:", "condominio", {"busca": sheet["condominio_nome"], "rua": sheet["logradouro"], "bairro": sheet["bairro"], "cidade": sheet["cidade"]}))
+    address = [_step("Localização do imóvel", "Cidade:", "lista", sheet["cidade"]),
+               _step("Localização do imóvel", "Logradouro:", "logradouro", {"rua": sheet["logradouro"], "bairro": sheet["bairro"]}),
+               _step("Localização do imóvel", "Número", "texto", sheet["numero"])]
+    steps += [{**step, "sem_condominio": True} for step in address]
+    steps.append(_step("Localização do imóvel", "Complemento:", "texto", _complement(item, sheet, rules)))
     section = "Características"
     if sheet["venda"]:
         steps += [_step(section, "Venda", "marcar", True), _step(section, "*Valor de venda:", "dinheiro", sheet["venda"])]
@@ -94,30 +158,31 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
               _step(section, "Data da avaliação:", "texto", today.strftime("%d/%m/%Y"))]
     if sheet["locacao"]:
         steps += [_step(section, name, "marcar", True) for name in rules["garantias"]]
-    section = "Detalhes"
-    built = sheet["area_construida"] or sheet["area_terreno"]
-    land = sheet["area_terreno"] or built
-    steps += [_step(section, "*Área do terreno:", "texto", land), _step(section, "*Área construída:", "texto", built)]
-    steps += _fixed(rules, section, ("Isolamento:", "lista"), ("Modo Isolamento:", "lista"), ("Posição solar/Face:", "lista"), ("Topografia:", "lista"))
-    check.append(f"Topografia marcada como {fixed.get('Topografia:', '')}: confira pelas fotos.")
-    steps += [_step(section, name, "marcar", True) for name in rules["infraestrutura"]]
-    if item.get("tipo") == "pavilhao":
-        height = sheet["pe_direito"] or fixed.get("pe_direito_pavilhao", "")
-        if not sheet["pe_direito"]:
-            check.append(f"Pe-direito estimado em {height} m: ajuste se souber a medida.")
-        steps += [_step(section, "Altura do pé direito", "texto", height), _step(section, "Pavimentação", "marcar", True)]
-        steps += _fixed(rules, section, ("Tipo de pavimentação", "lista"))
-    if sheet["docas"]:
-        check.append(f"A ficha cita {sheet['docas']} docas e a opcao Doca ficou desmarcada: marque se este imovel tiver.")
-    if sheet["mobiliado"]:
-        steps.append(_step(section, "Mobiliado", "marcar", True))
-    steps.append(_step(section, "Nº de andares", "texto", sheet["andares"] or fixed.get("andares_padrao", "1")))
-    if sheet["vagas"]:
-        steps += [_step(section, "Vagas cobertas", "texto", "0"), _step(section, "Vagas descobertas", "texto", sheet["vagas"])]
-        steps += _fixed(rules, section, ("Tipo de vaga", "lista"), ("Característica da vaga", "lista"))
-    if sheet["banheiros"]:
-        steps.append(_step(section, "Nº de banheiros", "texto", sheet["banheiros"]))
-    steps += [_step(section, name, "marcar", True) for name in rules["piso"]]
+    if item.get("tipo") == "apartamento":
+        steps += _apartment_details(sheet, rules, check) + _parking(sheet, rules)
+    else:
+        section = "Detalhes"
+        built = sheet["area_construida"] or sheet["area_terreno"]
+        land = sheet["area_terreno"] or built
+        steps += [_step(section, "*Área do terreno:", "texto", land), _step(section, "*Área construída:", "texto", built)]
+        steps += _fixed(rules, section, ("Isolamento:", "lista"), ("Modo Isolamento:", "lista"), ("Posição solar/Face:", "lista"), ("Topografia:", "lista"))
+        check.append(f"Topografia marcada como {fixed.get('Topografia:', '')}: confira pelas fotos.")
+        steps += [_step(section, name, "marcar", True) for name in rules["infraestrutura"]]
+        if item.get("tipo") == "pavilhao":
+            height = sheet["pe_direito"] or fixed.get("pe_direito_pavilhao", "")
+            if not sheet["pe_direito"]:
+                check.append(f"Pe-direito estimado em {height} m: ajuste se souber a medida.")
+            steps += [_step(section, "Altura do pé direito", "texto", height), _step(section, "Pavimentação", "marcar", True)]
+            steps += _fixed(rules, section, ("Tipo de pavimentação", "lista"))
+        if sheet["docas"]:
+            check.append(f"A ficha cita {sheet['docas']} docas e a opcao Doca ficou desmarcada: marque se este imovel tiver.")
+        if sheet["mobiliado"]:
+            steps.append(_step(section, "Mobiliado", "marcar", True))
+        steps.append(_step(section, "Nº de andares", "texto", sheet["andares"] or fixed.get("andares_padrao", "1")))
+        steps += _parking(sheet, rules)
+        if sheet["banheiros"]:
+            steps.append(_step(section, "Nº de banheiros", "texto", sheet["banheiros"]))
+        steps += [_step(section, name, "marcar", True) for name in rules["piso"]]
     steps.append(_step("Fotos", "Fotos", "fotos"))
     section = "Publicação na web"
     steps += _fixed(rules, section, ("Anunciar:", "lista"), ("Comunicar proprietário:", "lista"), ("Imóvel em destaque:", "lista"), ("Imóvel em super destaque:", "lista"))
@@ -132,14 +197,15 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
     return {"passos": [step for step in steps if step["campo"] not in empty], "faltando": missing + empty, "conferir": check}
 
 
-def ad_prompt(item: dict[str, Any], sheet: dict[str, Any]) -> str:
+def ad_prompt(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any] | None = None) -> str:
     """Mesmo pedido do dono, levando so os dados que podem ir no anuncio."""
     kind = {"pavilhao": "um pavilhao", "casa": "uma casa", "apartamento": "um apartamento", "sala": "uma sala comercial",
             "loja": "uma loja", "terreno": "um terreno", "predio": "um predio"}.get(item.get("tipo", ""), "um imovel")
     purpose = "locacao" if sheet["locacao"] and not sheet["venda"] else "venda" if sheet["venda"] and not sheet["locacao"] else "venda e locacao"
-    facts = {"Bairro": sheet["bairro"], "Cidade": sheet["cidade"], "Area": f"{sheet['area_construida']} m2" if sheet["area_construida"] else "",
+    facts = {"Condominio": sheet.get("condominio_nome", ""), "Bairro": sheet["bairro"], "Cidade": sheet["cidade"], "Area": f"{sheet['area_construida']} m2" if sheet["area_construida"] else "",
              "Docas": sheet["docas"], "Rampas": sheet["rampas"], "Banheiros": sheet["banheiros"], "Vagas": sheet["vagas"],
-             "Dormitorios": sheet["dormitorios"], "Suites": sheet["suites"]}
+             "Dormitorios": sheet["dormitorios"], "Suites": sheet["suites"],
+             "Diferenciais": ", ".join(condo_rules(sheet, rules or {}).get("caixas", []))}
     return AD_REQUEST.format(kind=kind, purpose=purpose) + "\n" + "\n".join(f"{name}: {value}" for name, value in facts.items() if value)
 
 
@@ -152,7 +218,7 @@ def clean_ad(text: str, sheet: dict[str, Any]) -> str:
     return "" if leaked or len(plain) < 80 else plain
 
 
-def template_ad(item: dict[str, Any], sheet: dict[str, Any], company: str) -> str:
+def template_ad(item: dict[str, Any], sheet: dict[str, Any], company: str, rules: dict[str, Any] | None = None) -> str:
     """Anuncio feito so com os dados da ficha, quando o modelo nao responde."""
     name = {"pavilhao": "Pavilhão", "casa": "Casa", "apartamento": "Apartamento", "sala": "Sala comercial", "loja": "Loja",
             "terreno": "Terreno", "predio": "Prédio"}.get(item.get("tipo", ""), "Imóvel")
@@ -163,5 +229,6 @@ def template_ad(item: dict[str, Any], sheet: dict[str, Any], company: str) -> st
              f"{sheet['rampas']} rampas de acesso" if sheet["rampas"] else "", f"{sheet['banheiros']} banheiros" if sheet["banheiros"] else "",
              f"{sheet['vagas']} vagas" if sheet["vagas"] else ""]
     lines += [f"- {fact}" for fact in facts if fact]
+    lines += [f"- {extra}" for extra in condo_rules(sheet, rules or {}).get("caixas", [])]
     lines.append(f"Entre em contato com a {company} e agende uma visita.")
     return "\n".join(lines)

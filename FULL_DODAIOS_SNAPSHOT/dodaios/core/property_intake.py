@@ -55,7 +55,8 @@ def classify(text: str) -> dict[str, Any]:
     lines = [line for line in folded.splitlines() if line.strip()]
     doubts: list[str] = []
     in_title = _types_in(lines[0]) if lines else []
-    candidates = in_title or _types_in(folded)
+    labeled = re.search(r"^\s*tipo\s*:\s*(.+)$", folded, re.MULTILINE)
+    candidates = (_types_in(labeled.group(1)) if labeled else []) or in_title or _types_in(folded)
     kinds = {kind for kind, _purpose in candidates}
     kind, purpose = "", ""
     if len(kinds) == 1:
@@ -70,6 +71,9 @@ def classify(text: str) -> dict[str, Any]:
         purpose = "comercial"
     if re.search(r"\bresidencial\b", lines[0] if lines else "") and kind == "terreno":
         purpose = "residencial"
+    stated = re.search(r"^\s*finalidade\s*:\s*(residencial|comercial)", folded, re.MULTILINE)
+    if stated and kind:
+        purpose = stated.group(1)
     # Se a ficha nao fala em condominio, o imovel nao esta em um.
     condominium = bool(_CONDOMINIUM.search(folded)) and not _NOT_CONDOMINIUM.search(folded)
     return {"tipo": kind, "finalidade": purpose, "condominio": condominium, "duvidas": doubts}
@@ -170,6 +174,11 @@ def _queue_order(item: dict[str, Any]) -> tuple[int, str]:
     """Sempre em sequencia: codigo 2 antes do 3; sem codigo, por ultimo."""
     code = re.fullmatch(r"codigo-(\d+)", item["chave"])
     return int(code.group(1)) if code else 10**9, item["recebido"]
+
+
+def all_items() -> list[dict[str, Any]]:
+    with _LOCK:
+        return sorted(_load().values(), key=_queue_order)
 
 
 def next_pending() -> dict[str, Any] | None:

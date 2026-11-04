@@ -2441,7 +2441,9 @@ class WebServer:
                 target = (DIST_DIR / full_path).resolve()
                 dist_root = DIST_DIR.resolve()
                 if target.is_file() and dist_root in target.parents:
-                    return FileResponse(str(target))
+                    # O app do Mac guardava a versao antiga deste arquivo.
+                    fresh = {"Cache-Control": "no-store, max-age=0"} if target.name == "aprender.js" else None
+                    return FileResponse(str(target), headers=fresh)
             except (OSError, ValueError):
                 pass
             # A missing asset (image/script/font) gets an honest 404, never the

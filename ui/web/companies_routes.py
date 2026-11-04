@@ -262,6 +262,44 @@ def get_companies() -> dict:
         return _read_state().model_dump(mode="json")
 
 
+def _fired_file() -> Path:
+    return _data_file().with_name("company_fired.json")
+
+
+def remember_fired(member_id: str) -> None:
+    """A tela pode estar com a lista antiga; o demitido nao pode voltar."""
+    path = _fired_file()
+    try:
+        fired = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        fired = []
+    path.write_text(json.dumps(sorted({*fired, member_id})), encoding="utf-8")
+
+
+def _keep_server_changes(body: CompaniesState) -> None:
+    """A tela salva a lista inteira: nao perde o que o servidor criou nesse meio tempo."""
+    try:
+        fired = set(json.loads(_fired_file().read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        fired = set()
+    current = {company.id: company for company in _read_state().companies}
+    for company in body.companies:
+        saved = current.get(company.id)
+        if saved is None:
+            continue
+        company.members = [item for item in company.members if item.id not in fired]
+        names = {item.id: item for item in saved.members}
+        for item in company.members:
+            if item.id in names:  # nome e setor mudam so pelo servidor
+                item.name, item.role, item.departmentId = names[item.id].name, names[item.id].role, names[item.id].departmentId
+        people = {item.id for item in company.members}
+        company.members += [item for item in saved.members if item.id not in people and item.id not in fired]
+        sectors = {item.id for item in company.departments}
+        company.departments += [item for item in saved.departments if item.id not in sectors]
+        tasks = {item.id for item in company.tasks}
+        company.tasks = [item for item in saved.tasks if item.id not in tasks] + company.tasks
+
+
 @router.put("")
 def replace_companies(body: CompaniesState) -> dict:
     ids = [company.id for company in body.companies]
@@ -270,6 +308,7 @@ def replace_companies(body: CompaniesState) -> dict:
     if body.activeCompanyId and body.activeCompanyId not in set(ids):
         body.activeCompanyId = ids[0] if ids else None
     with _LOCK:
+        _keep_server_changes(body)
         _write_state(body)
     return {"ok": True, **body.model_dump(mode="json")}
 

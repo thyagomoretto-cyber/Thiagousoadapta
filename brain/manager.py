@@ -10871,6 +10871,23 @@ class BrainManager:
                 )
                 return weather_reply
 
+            # JA: o especialista de cadastro atende direto, sem o modelo.
+            from dodaios.core.property_agent import answer_property_request
+
+            property_reply = answer_property_request(user_text)
+            if property_reply is None:
+                from dodaios.ui.web.company_skills_routes import answer_company_request
+
+                property_reply = answer_company_request(user_text)
+            if property_reply is not None:
+                await self._record_response_side_effects(
+                    user_text=user_text,
+                    response_text=property_reply,
+                    use_history=use_history,
+                    trace_id=turn_trace_id,
+                )
+                return property_reply
+
         if (
             not screen_context.has_image
             and self._skill_turn_match is None

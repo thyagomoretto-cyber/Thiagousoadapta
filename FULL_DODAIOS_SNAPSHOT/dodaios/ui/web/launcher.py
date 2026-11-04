@@ -2328,6 +2328,10 @@ def _main(argv: list[str] | None = None) -> int:
         args.background_service = True
     if args.background_service:
         args.headless = True
+    if args.headless:
+        from dodaios.core.background_focus import stay_in_background  # noqa: PLC0415
+
+        stay_in_background()
 
     # From here on every desktop launch is written down — see the helper.
     if not args.headless:

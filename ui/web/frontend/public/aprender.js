@@ -193,8 +193,224 @@
     if (!state.review) state.notice = "Nenhum imóvel para revisar.";
   }
 
-  async function openProperty() {
-    const item = (await api("/api/company-voice/imoveis")).proximo;
+  const companyUrl = (suffix) => `/api/company-voice/empresa/${encodeURIComponent(state.companyId)}${suffix}`;
+
+  async function loadOrganization() {
+    state.photoPanel = null;
+    state.org = await api(companyUrl("/organizacao"));
+    loadNames().catch(() => {});
+    state.skills = (await api(skillsUrl())).skills;
+    if (state.sector) state.sector = state.org.setores.find((item) => item.nome === state.sector.nome) || null;
+  }
+
+  async function openOrganization(sectorName, memberName) {
+    await loadOrganization();
+    state.skill = null;
+    const holder = memberName ? state.org.setores.find((item) => item.time.some((person) => person.nome === memberName)) : null;
+    state.sector = holder || (sectorName ? state.org.setores.find((item) => item.nome === sectorName) || null : null);
+    state.member = holder ? holder.time.find((person) => person.nome === memberName).id : null;
+    state.showOrg = true;
+    render();
+  }
+
+  async function sendMission(prompt, label) {
+    const dispatch = async (confirmed) => {
+      const response = await fetch("/api/missions/dispatch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, language: "pt", confirmed }) });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 409 && payload.requires_confirm && !confirmed) {
+        if (!panel) await openPanel(document.querySelector(WORKSPACE));
+        ask(`Ação sensível detectada (${payload.matched_text || "ação"}). Autorizar?`, async () => { await dispatch(true); state.notice = label; }, false);
+        return false;
+      }
+      if (!response.ok) throw new Error(payload.detail || `Erro ${response.status}`);
+      return true;
+    };
+    if (await dispatch(false)) state.notice = label;
+  }
+
+  function requestTask(member) {
+    ask(member ? `O que ${member.nome} deve fazer?` : "Qual é a nova tarefa?", async (texto) => {
+      const route = await api(companyUrl("/tarefa"), { method: "POST", body: { texto, membro: member ? member.id : "" } });
+      const label = `Tarefa: ${route.rota.join(" → ")}.`;
+      if (route.criado) state.notice = `${route.rota[route.rota.length - 2]} criou ${route.criado}. Ele está pesquisando na internet.`;
+      else if (route.resposta) { state.answer = { rota: route.rota, resposta: route.resposta, fontes: route.fontes || [] }; }
+      else if (route.agente) state.notice = route.aviso ? `${label} ${route.aviso}.` : `${label} Agente iniciado.`;
+      else await sendMission(route.prompt, `${label} Acompanhe em Tarefas e missões.`);
+      await loadOrganization();
+    });
+  }
+
+  const studyLabel = (study) => {
+    if (!study || study.estado === "vazio") return "";
+    if (study.estado === "aguardando") return " · na fila para estudar";
+    if (study.estado === "pesquisando") return " · estudando na internet";
+    if (study.estado === "sem_fontes") return " · não achou fontes";
+    return ` · ${study.fontes} fontes, ${study.oficiais} oficiais`;
+  };
+
+  function answerView() {
+    const reply = state.answer;
+    return [row([button("← Voltar", () => { state.answer = null; render(); })]), title(reply.rota.join(" → ")),
+      el("div", { textContent: reply.resposta, style: { whiteSpace: "pre-wrap", fontSize: "13px" } }),
+      ...(reply.fontes.length ? [title("Fontes"), ...reply.fontes.map((url) => el("a", { href: url, target: "_blank", rel: "noreferrer", textContent: url, style: { display: "block", marginTop: "4px", fontSize: "12px", color: colors.text, wordBreak: "break-all" } }))] : [])];
+  }
+
+  const STATUS_LABELS = { livre: "Livre", trabalhando: "Trabalhando", aguardando: "Aguardando", erro: "Com erro" };
+
+  function memberActions(person, sector) {
+    const openSkill = () => {
+      const found = state.skills.find((skill) => person.habilidades.some((item) => item.id === skill.id));
+      if (!found) return learnFunction(sector);
+      state.showOrg = false;
+      state.skill = found;
+      render();
+    };
+    const edit = () => ask(`Novo nome de ${person.nome}`, async (nome) => {
+      await api(companyUrl(`/funcionario/${encodeURIComponent(person.id)}`), { method: "PATCH", body: { nome, cargo: person.cargo } });
+      await loadOrganization();
+      state.notice = `Nome alterado para ${nome}.`;
+    }, true, person.nome);
+    const fire = () => ask(`Demitir ${person.nome}? As habilidades dele serão apagadas e não será possível recuperar.`, async () => {
+      await api(companyUrl(`/funcionario/${encodeURIComponent(person.id)}`), { method: "DELETE", body: {} });
+      await loadOrganization();
+      state.notice = `${person.nome} foi demitido.`;
+    }, false);
+    return row([button("Mandar tarefa", () => requestTask(person), true), button("Ensinar", openSkill), button("Alterar nome", edit), ...(person.tipo === "gerente" ? [] : [button("Demitir", fire)])]);
+  }
+
+  function memberCard(person, sector) {
+    return el("button", { type: "button", onclick: () => { state.sector = sector; state.member = person.id; render(); }, style: { display: "block", width: "100%", textAlign: "left", padding: "10px 12px", borderRadius: "10px", border: `1px solid ${colors.line}`, background: colors.card, color: colors.text, cursor: "pointer" } }, [
+      el("div", { textContent: person.nome, style: { fontWeight: "600", fontSize: "13px" } }),
+      el("div", { textContent: `${person.tipo === "gerente" ? "Gerente" : person.cargo} · ${STATUS_LABELS[person.status] || person.status}`, style: { fontSize: "12px", color: colors.muted } }),
+      ...(person.agora ? [el("div", { textContent: `Agora: ${person.agora}`, style: { marginTop: "2px", fontSize: "12px" } })] : []),
+    ]);
+  }
+
+  function knowledgeView(item) {
+    const small = { marginTop: "4px", fontSize: "12px", color: colors.muted };
+    const study = item.conhecimento || {};
+    const again = () => guarded(async () => {
+      await api(companyUrl(`/habilidade/${encodeURIComponent(item.id)}/estudar`), { method: "POST", body: {} });
+      await loadOrganization();
+      state.notice = "Ele voltou a estudar. Acompanhe aqui.";
+    });
+    const list = (name, values) => (values && values.length ? [el("div", { textContent: name, style: { marginTop: "8px", fontSize: "12px", fontWeight: "600" } }), ...values.map((text) => el("div", { textContent: `• ${text}`, style: small }))] : []);
+    const sources = (study.lista || []).map((source) => el("a", { href: source.url, target: "_blank", textContent: `${source.oficial ? "Oficial · " : ""}${source.titulo}`, style: { ...small, display: "block", color: colors.text } }));
+    return [...list("Como faz", item.listaPassos), ...list("Regras", item.listaRegras),
+      ...(sources.length ? [el("div", { textContent: `Fontes estudadas (${study.trechos} trechos)`, style: { marginTop: "8px", fontSize: "12px", fontWeight: "600" } }), ...sources] : []),
+      ...(["aguardando", "pesquisando"].includes(study.estado) ? [] : [row([button("Estudar de novo", again)])])];
+  }
+
+  function photoWork() {
+    const small = { marginTop: "4px", fontSize: "12px", color: colors.muted };
+    const panelData = state.photoPanel;
+    if (!panelData) {
+      guarded(async () => { state.photoPanel = await api("/api/company-voice/imoveis/fotos/painel"); });
+      return [title("Fotos dos imóveis"), el("div", { textContent: "Carregando...", style: small })];
+    }
+    const rows = panelData.itens.flatMap((item) => [
+      el("div", { textContent: `${item.titulo} · ${item.fotos || 0} fotos · ${item.aprovada ? "ordem aprovada" : item.duvidas && item.duvidas.length ? `${item.duvidas.length} em dúvida` : "sem dúvidas"}`, style: { marginTop: "8px", fontSize: "13px" } }),
+      ...(item.faltando && item.faltando.length ? [el("div", { textContent: `Falta foto: ${item.faltando.join(", ")}`, style: small })] : []),
+      ...(item.aprovada ? [] : (item.duvidas || []).slice(0, 4).map((text) => el("div", { textContent: `• ${text}`, style: small }))),
+      row([button("Ver fotos", () => guarded(() => openProperty(item.chave)))])]);
+    return [title("Fotos dos imóveis"), el("div", { textContent: `${panelData.correcoes} correções suas aprendidas`, style: small }),
+      ...(rows.length ? rows : [el("div", { textContent: "Nenhum imóvel analisado ainda.", style: small })])];
+  }
+
+  function memberView(person, sector) {
+    const small = { marginTop: "4px", fontSize: "12px", color: colors.muted };
+    const skills = person.habilidades.length ? person.habilidades.map((item) => el("div", { style: { marginTop: "6px", fontSize: "13px" } }, [
+      el("div", { textContent: `${item.nome}${studyLabel(item.conhecimento)}` }),
+      el("div", { textContent: `${item.quando || "Sem descrição"} · ${item.passos} passos · ${item.regras} regras`, style: small }),
+      ...knowledgeView(item)])) : [el("div", { textContent: person.tipo === "gerente" ? "Coordena o setor e distribui as tarefas." : "Ainda sem habilidade ensinada.", style: small })];
+    const tasks = person.tarefas.length ? person.tarefas.map((task) => el("div", { textContent: `${task.status} · ${task.titulo}`, style: small })) : [el("div", { textContent: "Nenhuma tarefa ainda.", style: small })];
+    return [row([button(`← ${sector.nome}`, () => { state.member = null; render(); })]), title(person.nome),
+      el("div", { textContent: `${person.cargo} · ${sector.nome} · ${STATUS_LABELS[person.status] || person.status}`, style: small }),
+      title("Fazendo agora"), el("div", { textContent: person.agora || "Nada no momento.", style: { fontSize: "13px" } }),
+      memberActions(person, sector), ...(person.habilidades.some((item) => /fotos/i.test(item.nome)) ? photoWork() : []), title("O que faz"), ...skills, title("Últimas tarefas"), ...tasks];
+  }
+
+  function learnFunction(sector) {
+    ask(`Especialista em quê? (${sector.nome})`, async (nome) => {
+      await api(companyUrl(`/setor/${encodeURIComponent(sector.id)}/aprender`), { method: "POST", body: { nome } });
+      await loadOrganization();
+      state.notice = `Especialista em ${nome} criado. Ele já vai estudar a função.`;
+    });
+  }
+
+  function organizationView() {
+    const studying = state.org.setores.some((sector) => sector.time.some((person) => person.habilidades.some((item) => item.conhecimento && ["pesquisando", "aguardando"].includes(item.conhecimento.estado))));
+    clearTimeout(state.orgTimer);
+    if (studying) state.orgTimer = setTimeout(() => guarded(loadOrganization), 5000);
+    const teamGrid = (sector) => el("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "8px", marginTop: "8px" } }, sector.time.map((person) => memberCard(person, sector)));
+    const pick = (sector) => { state.sector = sector; state.member = null; render(); };
+    const options = [{ value: "", text: "Todos os departamentos" }, ...state.org.setores.map((item) => ({ value: item.nome, text: item.nome }))];
+    const select = el("select", { "ariaLabel": "Departamento", style: { ...fieldStyle, width: "auto", minWidth: "240px" }, onchange: (event) => pick(state.org.setores.find((item) => item.nome === event.target.value) || null) },
+      options.map((item) => el("option", { value: item.value, textContent: item.text })));
+    select.value = state.sector ? state.sector.nome : "";
+    const addSector = () => ask("Nome do novo departamento", async (nome) => {
+      await api(companyUrl("/departamento"), { method: "POST", body: { nome } });
+      await loadOrganization();
+      state.sector = state.org.setores.find((item) => item.nome === nome) || null;
+      state.notice = `Departamento ${nome} criado, com gerente.`;
+    });
+    const chooser = row([select, button("Nova tarefa", () => requestTask(null)), button("Adicionar departamento", addSector)]);
+    if (!state.sector) {
+      return [...(state.wide ? [] : [row([button("← Voltar", () => { state.showOrg = false; render(); })])]), chooser,
+        ...state.org.setores.flatMap((sector) => [title(sector.nome), el("div", { textContent: `${sector.time.length} no time · ${sector.missao}`, style: { fontSize: "12px", color: colors.muted } }), teamGrid(sector)])];
+    }
+    const sector = state.sector;
+    const opened = sector.time.find((person) => person.id === state.member);
+    if (opened) return memberView(opened, sector);
+    const build = () => guarded(async () => {
+      state.notice = "O gerente está montando a equipe...";
+      render();
+      const result = await api(companyUrl(`/setor/${encodeURIComponent(sector.id)}/montar-equipe`), { method: "POST", body: {} });
+      await loadOrganization();
+      state.notice = result.criados.length ? `Novos especialistas: ${result.criados.join(", ")}.${result.basico ? " Comecei pelas funções básicas; ensine como a empresa faz." : ""}` : "A equipe já cobre as funções do setor.";
+    });
+    return [chooser, title(sector.nome), el("div", { textContent: sector.missao, style: { fontSize: "12px", color: colors.muted } }),
+      ...(sector.id ? [row([button("Adicionar especialista", () => learnFunction(sector), true), button("Montar equipe", build)])] : []), teamGrid(sector)];
+  }
+
+  const isProperty = (skill) => /im[oó]ve/i.test(`${skill.name} ${skill.id}`);
+
+  async function loadAgent() {
+    state.agent = await api("/api/company-voice/imoveis/agente");
+    clearTimeout(state.agentTimer);
+    if (state.agent.rodando) state.agentTimer = setTimeout(() => guarded(loadAgent), 4000);
+  }
+
+  function specialistCard(skill) {
+    const name = (members(() => true).find((member) => member.id === skill.specialistId) || {}).name || "Especialista";
+    const head = el("div", { textContent: name, style: { fontWeight: "600", fontSize: "14px" } });
+    const box = { marginTop: "12px", padding: "12px", borderRadius: "10px", border: `1px solid ${colors.line}`, background: colors.card };
+    if (!isProperty(skill)) return el("div", { style: box }, [head, el("div", { textContent: "Use Testar habilidade para pedir esta tarefa.", style: { marginTop: "4px", fontSize: "12px", color: colors.muted } })]);
+    const agent = state.agent;
+    if (!agent) {
+      guarded(loadAgent);
+      return el("div", { style: box }, [head]);
+    }
+    const run = (save) => guarded(async () => {
+      state.agent = await api("/api/company-voice/imoveis/agente", { method: "POST", body: { salvar: save } });
+      await loadAgent();
+    });
+    const labels = { cadastrado: "Cadastrado", pendente: "Pendente", revisar: "Revisar" };
+    const lines = agent.itens.slice(-12).map((item) => el("div", { textContent: `${labels[item.status] || item.status} · ${item.chave} · ${item.titulo}${item.nota ? ` · ${item.nota}` : ""}`, style: { marginTop: "4px", fontSize: "12px" } }));
+    const save = button("Cadastrar agora", () => run(true), true);
+    save.disabled = agent.rodando || !agent.salvar_liberado;
+    const check = button("Conferir sem salvar", () => run(false));
+    check.disabled = agent.rodando;
+    [save, check].forEach((item) => { if (item.disabled) item.style.opacity = "0.5"; });
+    return el("div", { style: box }, [head,
+      el("div", { textContent: `${agent.rodando ? "Trabalhando agora" : "Parado"} · ${agent.contagem.cadastrado} cadastrados · ${agent.contagem.pendente} pendentes · ${agent.contagem.revisar} para revisar`, style: { marginTop: "4px", fontSize: "12px", color: colors.muted } }),
+      ...(agent.ultimo ? [el("div", { textContent: `Último: ${agent.ultimo}`, style: { marginTop: "4px", fontSize: "12px", color: colors.muted } })] : []),
+      ...(agent.salvar_liberado ? [] : [el("div", { textContent: "Salvamento ainda não liberado: por enquanto ele preenche e espera você conferir.", style: { marginTop: "4px", fontSize: "12px", color: colors.muted } })]),
+      ...lines, row([save, check, button("Atualizar", () => guarded(loadAgent))])]);
+  }
+
+  async function openProperty(key) {
+    const item = key ? { chave: key } : (await api("/api/company-voice/imoveis")).proximo;
     if (!item) { state.notice = "Nenhum imóvel na fila."; return; }
     state.notice = "Analisando as fotos...";
     render();
@@ -497,8 +713,9 @@
     const history = skill.history.slice().reverse().slice(0, 30).map((item) => el("div", { textContent: `v${item.version} · ${item.at.slice(0, 16).replace("T", " ")} · ${item.change}`, style: { padding: "4px 0", fontSize: "12px", color: colors.muted } }));
     const teach = () => { state.teach = { session: null, log: [], learned: [], saved: [], busy: false }; render(); };
     return [row([button("← Voltar", () => { state.skill = null; render(); }), button("Ensinar conversando", teach, true), button("Testar habilidade", test)]),
+      specialistCard(skill),
       row([button(state.reading ? "Lendo o grupo..." : "Ler grupo do WhatsApp", askGroup),
-        state.batch ? button("Parar lote", () => { state.batch.stop = true; render(); }) : button("Cadastrar os novos", () => guarded(() => runBatch(skill))),
+        ...(isProperty(skill) ? [] : [state.batch ? button("Parar lote", () => { state.batch.stop = true; render(); }) : button("Cadastrar os novos", () => guarded(() => runBatch(skill)))]),
         button("Revisar imóveis", () => guarded(openReview)), button("Fotos e Kenlo", () => guarded(openProperty))]),
       ...(state.batch ? [el("div", { textContent: `Cadastrando: ${state.batch.current || "..."} (${state.batch.done} feitos)`, style: { marginTop: "10px", fontSize: "12px", color: colors.muted } })] : []),
       el("div", { textContent: `${skill.examples.length} de 10 exemplos · versão ${skill.version}`, style: { marginTop: "12px", fontSize: "12px", color: colors.muted } }),
@@ -512,13 +729,26 @@
       title("Histórico de aprendizado"), ...history];
   }
 
+  // Na aba Equipe a tela ocupa a area das abas e deixa o menu visivel.
+  function placePanel() {
+    const nav = panel.parentElement.querySelector("nav:not(aside nav)");
+    if (state.wide && nav) {
+      const host = panel.parentElement.getBoundingClientRect();
+      const bar = nav.getBoundingClientRect();
+      Object.assign(panel.style, { left: `${bar.left - host.left}px`, top: `${bar.bottom - host.top}px`, width: "auto", borderLeft: "none" });
+    } else {
+      Object.assign(panel.style, { left: "", top: "0", width: "min(480px, 100%)", borderLeft: `1px solid ${colors.line}` });
+    }
+  }
+
   function render() {
     if (!panel) return;
-    const body = state.asking ? askView() : state.review ? reviewView() : state.property ? propertyView() : state.teach ? teachView() : state.skill ? skillView(state.skill) : listView();
+    placePanel();
+    const body = state.asking ? askView() : state.review ? reviewView() : state.property ? propertyView() : state.teach ? teachView() : state.answer ? answerView() : state.showOrg ? organizationView() : state.skill ? skillView(state.skill) : listView();
     panel.replaceChildren(
       el("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px" } }, [
-        el("h2", { textContent: state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),
-        button("Fechar", closePanel),
+        el("h2", { textContent: state.showOrg ? "Departamentos" : state.skill ? state.skill.name : "Aprender nova tarefa", style: { margin: "0", fontSize: "16px", fontWeight: "600" } }),
+        ...(state.teamTab && state.showOrg ? [] : [button("Fechar", closePanel)]),
       ]),
       ...(state.error ? [el("div", { role: "alert", textContent: state.error, style: { marginTop: "10px", color: "hsl(var(--destructive))", fontSize: "12px" } })] : []),
       ...(state.notice ? [el("div", { textContent: state.notice, style: { marginTop: "10px", color: colors.muted, fontSize: "12px" } })] : []),
@@ -527,7 +757,7 @@
     state.notice = "";
   }
 
-  function closePanel() { if (panel) panel.remove(); panel = null; state.teach = null; }
+  function closePanel() { if (panel) panel.remove(); panel = null; state.teach = null; state.showOrg = false; state.sector = null; state.member = null; state.answer = null; state.wide = false; state.teamTab = false; }
 
   function openPanel(host) {
     panel = el("section", { "ariaLabel": "Aprender nova tarefa", style: { position: "absolute", top: "0", right: "0", bottom: "0", zIndex: "10", width: "min(480px, 100%)", boxSizing: "border-box", padding: "20px", overflowY: "auto", borderLeft: `1px solid ${colors.line}`, background: colors.bg, color: colors.text, fontSize: "13px" } });
@@ -553,6 +783,155 @@
     }, true);
   }
 
+  async function openTeam(host, name, member) {
+    state.wide = true;
+    state.teach = null; state.review = null; state.property = null; state.answer = null; state.asking = null;
+    if (!panel) await openPanel(host);
+    if (state.shownCompany && state.shownCompany !== state.companyId) await guarded(() => loadCompany(state.shownCompany));
+    await guarded(() => openOrganization(name, member));
+  }
+
+  async function loadNames() {
+    const data = await api("/api/companies");
+    state.activeCompany = data.activeCompanyId || (data.companies[0] && data.companies[0].id) || null;
+    state.sectorNames = data.companies.flatMap((company) => (company.departments || []).map((item) => item.name));
+    state.memberNames = data.companies.flatMap((company) => (company.members || []).map((item) => item.name));
+  }
+
+  // Os cartoes de setor e de pessoa abrem a ficha; a aba Equipe abre os setores.
+  function watchClicks(host) {
+    if (host.dataset.setores) return;
+    host.dataset.setores = "1";
+    host.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element) || target.closest('[data-testid="aprender-painel"], [data-testid="conversa-empresa"]')) return;
+      const side = target.closest("aside");
+      if (side) {
+        const chosen = target.closest("button");
+        const company = chosen && (state.companies || []).find((item) => chosen.textContent.includes(item.name));
+        if (company) state.shownCompany = company.id;
+        if (company && state.wide) closePanel();
+        return;
+      }
+      const tab = target.closest("nav button");
+      if (tab) {
+        state.teamTab = tab.textContent.trim() === "Departamentos";
+        if (state.teamTab) openTeam(host, "");
+        else if (state.wide) closePanel();
+        return;
+      }
+      if (target.closest("button, input, select, textarea, a")) return;
+      let node = target;
+      for (let depth = 0; node && node !== host && depth < 3; depth += 1, node = node.parentElement) {
+        const leaves = [...node.querySelectorAll("div, span, h3, h4, p"), node].filter((item) => !item.childElementCount).map((item) => item.textContent.trim());
+        const members = [...new Set(leaves.filter((text) => (state.memberNames || []).includes(text)))];
+        const sectors = [...new Set(leaves.filter((text) => (state.sectorNames || []).includes(text)))];
+        if (members.length + sectors.length > 1) return;
+        if (members.length) { openTeam(host, "", members[0]); return; }
+        if (sectors.length) { openTeam(host, sectors[0]); return; }
+      }
+    });
+    window.addEventListener("resize", () => { if (panel) placePanel(); });
+  }
+
+  const DRAFT = "dodaios-conversa-rascunho";
+  const chatUrl = () => `/api/company-voice/empresa/${encodeURIComponent(state.shownCompany || state.activeCompany)}/conversa`;
+  const remembered = () => { try { return localStorage.getItem(DRAFT) || ""; } catch { return ""; } };
+  const remember = (text) => { try { localStorage.setItem(DRAFT, text); } catch { /* sem armazenamento */ } };
+
+  function chatBubble(message) {
+    const mine = message.quem === "voce";
+    return el("div", { style: { display: "flex", justifyContent: mine ? "flex-end" : "flex-start", marginTop: "8px" } }, [
+      el("div", { style: { maxWidth: "80%", padding: "9px 12px", borderRadius: "12px", background: mine ? colors.main : colors.card, color: mine ? colors.onMain : colors.text, border: mine ? "none" : `1px solid ${colors.line}`, fontSize: "13px" } }, [
+        ...(message.rota && message.rota.length ? [el("div", { textContent: message.rota.join(" → "), style: { marginBottom: "4px", fontSize: "11px", color: colors.muted } })] : []),
+        el("div", { textContent: message.texto, style: { whiteSpace: "pre-wrap" } }),
+        ...(message.fontes || []).map((url) => el("a", { href: url, target: "_blank", rel: "noreferrer", textContent: url, style: { display: "block", marginTop: "4px", fontSize: "11px", color: colors.muted, wordBreak: "break-all" } })),
+      ]),
+    ]);
+  }
+
+  async function refreshChat() {
+    const box = state.chatBox;
+    if (!box || !box.isConnected) return;
+    clearTimeout(state.chatTimer);
+    const data = await api(chatUrl());
+    const list = box.querySelector('[data-testid="conversa-lista"]');
+    const opening = el("div", { textContent: "Pergunte, peça ou mande fazer. O Gerente Geral busca com quem sabe.", style: { fontSize: "12px", color: colors.muted } });
+    list.replaceChildren(...(data.mensagens.length ? data.mensagens.map(chatBubble) : [opening]));
+    list.scrollTop = list.scrollHeight;
+    if (data.estudando) state.chatTimer = setTimeout(() => refreshChat().catch(() => {}), 4000);
+  }
+
+  function chatPanel() {
+    const list = el("div", { style: { height: "130px", overflowY: "auto", padding: "4px 2px" } });
+    list.dataset.testid = "conversa-lista";
+    const field = el("textarea", { rows: 1, name: "conversa", placeholder: "Fale com a empresa...", value: remembered(), style: { ...fieldStyle, flex: "1", resize: "none" } });
+    const status = el("div", { style: { minHeight: "16px", marginTop: "4px", fontSize: "12px", color: colors.muted } });
+    const send = async () => {
+      const texto = field.value.trim();
+      if (!texto || field.disabled) return;
+      field.disabled = true;
+      status.textContent = "A empresa está respondendo...";
+      list.append(chatBubble({ quem: "voce", texto }));
+      list.scrollTop = list.scrollHeight;
+      try {
+        const reply = await api(chatUrl(), { method: "POST", body: { texto } });
+        field.value = "";
+        remember("");
+        if (reply.missao) await sendMission(reply.missao, "Tarefa encaminhada.");
+        status.textContent = "";
+      } catch (error) {
+        status.textContent = `Não consegui enviar: ${error.message}`;
+      }
+      field.disabled = false;
+      field.focus();
+      await refreshChat().catch(() => {});
+    };
+    field.addEventListener("input", () => remember(field.value));
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
+    });
+    const box = el("section", { style: { padding: "12px 16px", borderRadius: "16px", border: `1px solid ${colors.line}`, background: colors.bg, color: colors.text } }, [
+      el("div", { textContent: "Conversar com a empresa", style: { fontSize: "14px", fontWeight: "600" } }), list,
+      el("div", { style: { display: "flex", gap: "8px", alignItems: "flex-end", marginTop: "8px" } }, [field, button("Enviar", send, true)]), status]);
+    box.dataset.testid = "conversa-empresa";
+    return box;
+  }
+
+  function placeChat(host) {
+    if (!state.activeCompany && !state.shownCompany) return;
+    const mark = [...host.querySelectorAll("div, span")].find((node) => !node.childElementCount && node.textContent.trim() === "JARVIS Company Command")
+      || [...host.querySelectorAll("div, span")].find((node) => [...node.childNodes].some((child) => child.nodeType === 3 && child.textContent.trim() === "JARVIS Company Command"));
+    const hero = mark && mark.closest(".overflow-hidden");
+    if (!hero) return;
+    const shown = state.shownCompany || state.activeCompany;
+    if (!state.chatBox) state.chatBox = chatPanel();
+    if (state.chatBox.previousElementSibling !== hero) {
+      hero.after(state.chatBox);
+      state.chatLoaded = false;
+    }
+    if (state.chatCompany !== shown || !state.chatLoaded) {
+      state.chatCompany = shown;
+      state.chatLoaded = true;
+      refreshChat().catch(() => { state.chatLoaded = false; });
+    }
+  }
+
+  function hideTeamTab(host) {
+    host.querySelectorAll("nav button").forEach((node) => {
+      if (node.textContent.trim() === "Equipe" && !node.closest('[data-testid="aprender-painel"]')) node.style.display = "none";
+    });
+  }
+
+  function markCards(host) {
+    const names = [...(state.sectorNames || []), ...(state.memberNames || [])];
+    host.querySelectorAll("div").forEach((node) => {
+      if (node.childElementCount || !names.includes(node.textContent.trim()) || node.closest('[data-testid="aprender-painel"]') || !node.parentElement) return;
+      node.parentElement.style.cursor = "pointer";
+      node.style.textDecoration = "underline";
+    });
+  }
+
   function markManagers(host) {
     const open = () => { if (!panel) openPanel(host); };
     host.querySelectorAll("button, div, span, h3, h4, p").forEach((node) => {
@@ -570,12 +949,25 @@
     const host = document.querySelector(WORKSPACE);
     if (!host) { closePanel(); return; }
     markManagers(host);
+    watchClicks(host);
+    markCards(host);
+    hideTeamTab(host);
+    placeChat(host);
     takeOverAddButton(host);
+    if (!state.organized) {
+      state.organized = true;
+      api("/api/company-voice/empresas/organizar", { method: "POST", body: {} }).then(async () => {
+        await loadNames();
+        attach();
+      }).catch(() => { state.organized = false; });
+    }
     if (host.querySelector('[data-testid="aprender-botao"]')) return;
     const launch = button("Aprender nova tarefa", () => { if (!panel) openPanel(host); }, true);
     launch.dataset.testid = "aprender-botao";
-    Object.assign(launch.style, { position: "absolute", right: "20px", bottom: "20px", zIndex: "9" });
-    host.append(launch);
+    const task = button("Nova tarefa", () => openTeam(host, "").then(() => requestTask(null)), true);
+    task.dataset.testid = "nova-tarefa";
+    const actions = el("div", { style: { position: "absolute", top: "18px", right: "76px", zIndex: "9", display: "flex", gap: "8px" } }, [task, launch]);
+    host.append(actions);
   }
 
   let waiting = false;

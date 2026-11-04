@@ -63,6 +63,15 @@ SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
         "frente_rua", "ruas_proximas", "aereas", "dimensoes", "infraestrutura", "demais",
     ),
 }
+# O minimo para o anuncio ficar completo: faltando, avisa antes de publicar.
+ESSENTIALS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "casa": {"fachada": ("fachada",), "sala": ("sala_estar", "sala_jantar"), "cozinha": ("cozinha",), "dormitorio": ("dormitorio_principal", "dormitorio_2"), "banheiro": ("banheiro_suite", "banheiro_social", "banheiro_2")},
+    "apartamento": {"sala": ("sala_estar", "sala_jantar"), "cozinha": ("cozinha",), "dormitorio": ("dormitorio_principal", "dormitorio_2"), "banheiro": ("banheiro_suite", "banheiro_social"), "fachada do predio": ("condominio_fachada",)},
+    "casa_condominio": {"fachada": ("fachada",), "sala": ("sala_estar", "sala_jantar"), "cozinha": ("cozinha",), "dormitorio": ("dormitorio_principal", "dormitorio_2"), "banheiro": ("banheiro_suite", "banheiro_social", "banheiro_2")},
+    "sala_comercial": {"vista geral": ("vista_geral", "ambiente_principal"), "fachada do predio": ("edificio_fachada",)},
+    "loja": {"fachada": ("fachada",), "salao": ("salao_geral", "angulos_salao")},
+    "pavilhao": {"fachada": ("fachada",), "interna do galpao": ("panoramica_interna", "angulos_internos"), "salas ou escritorio, se houver": ("area_administrativa", "escritorios", "sala_reuniao"), "banheiro, se houver": ("banheiros",)},
+}
 _NUMBERED: Final[dict[str, tuple[str, ...]]] = {
     "dormitorio": ("dormitorio_principal", "dormitorio_2", "dormitorio_3", "dormitorio_demais"),
 }
@@ -156,7 +165,9 @@ def arrange(kind: str, photos: list[dict[str, Any]], suites: int = 0) -> dict[st
               if photo.get("confianca", 1) < DOUBT_BELOW and photo.get("fonte") != "dono"]
     if kept and kept[0]["ambiente"] not in sequence[:3]:
         doubts.insert(0, f"Nao achei a foto principal ({sequence[0].replace('_', ' ')}).")
-    return {"ordem": kept, "repetidas": repeated, "avisos": notes, "duvidas": doubts, "capa": kept[0]["caminho"] if kept else ""}
+    rooms = {photo["ambiente"] for photo in kept}
+    missing = [name for name, options in ESSENTIALS.get(kind, {}).items() if not rooms.intersection(options)]
+    return {"ordem": kept, "repetidas": repeated, "avisos": notes, "duvidas": doubts, "capa": kept[0]["caminho"] if kept else "", "faltando": missing}
 
 
 def fingerprint(path: Path) -> dict[str, Any]:

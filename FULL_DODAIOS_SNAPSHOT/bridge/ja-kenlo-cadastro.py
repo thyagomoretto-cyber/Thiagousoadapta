@@ -105,6 +105,23 @@ MAP_JS = r"""
 """
 
 
+CONDO_JS = r"""
+([name, street, area, city]) => {
+  const fold = window.__ja.fold;
+  const shown = [...document.querySelectorAll('li, [role=option], .select2-result, .tt-suggestion')].filter((node) => window.__ja.visible(node) && fold(node.innerText).includes(fold(name)));
+  const items = shown.filter((node) => !shown.some((other) => other !== node && node.contains(other)));
+  const road = fold(street).replace(/^(rua|avenida|av\.?)\s+/, '');
+  const has = (node, text) => text && fold(node.innerText).includes(fold(text));
+  const best = items.find((node) => road && fold(node.innerText).includes(road)) || items.find((node) => has(node, area) && has(node, city)) || items.find((node) => has(node, city));
+  if (!best) return '';
+  best.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+  best.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  best.click();
+  return best.innerText;
+}
+"""
+
+
 def digits(text: str) -> str:
     return re.sub(r"\D", "", text or "").lstrip("0")
 
@@ -117,6 +134,7 @@ class Form:
         self.log: list[str] = []
         self.failed: list[str] = []
         self.known_owner = False
+        self.condo_found = False
 
     def _control(self, section: str, field: str, types: list[str], wait_ms: int = FIELD_WAIT_MS):
         limit = time.monotonic() + wait_ms / 1000
@@ -248,6 +266,39 @@ class Form:
             raise LookupError("rua nao apareceu para este bairro")
         self.page.wait_for_timeout(1500)
 
+    def condo(self, section: str, field: str, value: dict) -> None:
+        """Escolhe o condominio pelo endereco; sem achar, segue pelo endereco normal."""
+        self.page.wait_for_timeout(1200)  # o campo so aparece depois do Tipo
+        self.page.evaluate(SEARCH_JS)
+        label = self.page.evaluate_handle("([s, f]) => window.__ja.label(s, f)", [section, field])
+        opener = None if self.page.evaluate("(node) => !node", label) else self.page.evaluate_handle(
+            """(label) => [...document.querySelectorAll('.select2-selection, .select2-choice, .chosen-single, [role=combobox], [class*=select], select, input[type=text]')].find((node) => (label.compareDocumentPosition(node) & 4) && window.__ja.visible(node)) || null""",
+            label).as_element()
+        if not opener:
+            self.log.append("AVISO condominio: campo nao apareceu; seguindo pelo endereco")
+            return
+        opener.click()
+        self.page.wait_for_timeout(500)
+        self.page.keyboard.type(value["busca"], delay=20)
+        chosen = ""
+        limit = time.monotonic() + 8
+        while time.monotonic() < limit and not chosen:
+            self.page.wait_for_timeout(500)
+            chosen = self.page.evaluate(CONDO_JS, [value["busca"], value["rua"], value["bairro"], value["cidade"]])
+        if not chosen:
+            self.page.keyboard.press("Escape")
+            self.log.append(f"AVISO condominio: {value['busca']} nao encontrado neste endereco; seguindo pelo endereco")
+            return
+        self.page.wait_for_timeout(1500)
+        skip = self.page.get_by_text(re.compile(r"encontrou o tipo", re.IGNORECASE)).first
+        try:
+            skip.wait_for(state="visible", timeout=5000)
+            skip.click()
+            self.page.wait_for_timeout(1200)
+        except Exception:
+            pass
+        self.condo_found = True
+
     def photos(self, paths: list[str]) -> None:
         """Envia uma por vez: juntas, chegam fora de ordem. A primeira vira capa."""
         for done, path in enumerate(paths):
@@ -271,9 +322,12 @@ class Form:
 
     def run(self, steps: list[dict], photos: list[str]) -> None:
         actions = {"texto": self.text, "telefone": self.phone, "dinheiro": self.text, "nome": self.name, "texto_longo": self.long_text, "lista": self.choose,
-                   "logradouro": self.street, "opcao": self.option}
+                   "logradouro": self.street, "opcao": self.option, "condominio": self.condo}
         for step in steps:
             section, field, how = step["secao"], step["campo"], step["como"]
+            if step.get("sem_condominio") and self.condo_found:
+                self.log.append(f"PULADO {section} > {field}: veio do condominio")
+                continue
             try:
                 if how == "fotos":
                     self.photos(photos)
@@ -347,24 +401,29 @@ def wait_login(page, target: str) -> None:
 
 def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     """Ficha, sequencia de fotos, anuncio e plano do imovel."""
-    from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision
+    from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision, property_intake as intake
     from dodaios.core.property_sheet import parse_sheet
 
-    sheet = parse_sheet(item["texto"])
+    sheet = plan.complete_sheet(item, parse_sheet(item["texto"]), rules)
     kind = order.sequence_kind(item["tipo"], item["condominio"])
     paths = [Path(path) for path in item.get("fotos", []) if Path(path).exists()]
     notes: list[str] = []
+    doubts: list[str] = []
     final = item.get("ordem_fotos") or []
     if not final:
         arranged = order.arrange(kind, vision.classify_all(paths, kind, rules["empresa"]), int(sheet["suites"] or 0))
         final = [photo["caminho"] for photo in arranged["ordem"]]
-        notes = arranged["avisos"] + arranged["duvidas"]
+        doubts = arranged["duvidas"]
+        notes = arranged["avisos"] + doubts
+        notes += [f"Falta foto no anuncio: {name}" for name in arranged["faltando"]]
         notes += [f"Repetida fora do anuncio: {Path(photo['caminho']).name}" for photo in arranged["repetidas"]]
         notes += [f"{Path(photo['caminho']).name}: {photo['ambiente']} ({photo['fonte']})" for photo in arranged["ordem"]]
-    text = plan.clean_ad(vision.write_ad(plan.ad_prompt(item, sheet)), sheet) or plan.template_ad(item, sheet, rules["nome_empresa"])
+        intake.update(item["chave"], analise_fotos={"fotos": len(final), "duvidas": doubts, "avisos": arranged["avisos"], "repetidas": len(arranged["repetidas"]), "faltando": arranged["faltando"], "problemas": vision.problems[-3:]})
+    text = plan.clean_ad(vision.write_ad(plan.ad_prompt(item, sheet, rules)), sheet) or plan.template_ad(item, sheet, rules["nome_empresa"], rules)
     built = plan.build_plan(item, sheet, rules, text)
     built["conferir"] += notes + vision.problems
     built["ficha"] = sheet
+    built["duvidas_fotos"] = doubts
     if not final:
         built["faltando"].append("fotos")
     return built, final
@@ -394,6 +453,11 @@ def fill(page, key: str, save: bool) -> bool:
     if built["faltando"]:
         intake.mark(key, intake.REVIEW, "Falta na ficha: " + ", ".join(built["faltando"]))
         print(f"KENLO_RESULTADO=FALTANDO {key} {report(key, None, built, [], 'parado antes de preencher')}", flush=True)
+        return False
+    if save and built["duvidas_fotos"]:
+        # O Especialista em Fotos so libera o imovel com a ordem certa.
+        intake.mark(key, intake.REVIEW, f"Fotos em duvida: {len(built['duvidas_fotos'])}. Confira a ordem.")
+        print(f"KENLO_RESULTADO=FOTOS_EM_DUVIDA {key} {report(key, None, built, [], 'parado: fotos em duvida')}", flush=True)
         return False
     if save and key in rules.get("ja_cadastrados", {}):
         print(f"KENLO_RESULTADO=JA_CADASTRADO {rules['ja_cadastrados'][key]}", flush=True)

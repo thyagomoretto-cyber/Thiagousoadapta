@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from dodaios.core import company_skills as store
 
-from .companies_routes import _read_state
+from dodaios.core import company_org as org
+from dodaios.core import company_chat as chat
+from dodaios.core import knowledge
+
+from .companies_routes import CompanyTask, Department, Member, _read_state, _write_state, remember_fired
 
 KENLO_WAIT_S = 1800
 
@@ -57,6 +63,100 @@ def _company_name(company_id: str) -> str:
     raise HTTPException(status_code=404, detail="Empresa nao encontrada")
 
 
+def _company(state, company_id: str):
+    company = next((item for item in state.companies if item.id == company_id), None)
+    if company is None:
+        raise HTTPException(status_code=404, detail="Empresa nao encontrada")
+    return company
+
+
+def _organized(company_id: str):
+    """Estado com a estrutura padrao aplicada; vale para qualquer empresa."""
+    state = _read_state()
+    company = _company(state, company_id)
+    if org.ensure_structure(company, Department, Member):
+        _write_state(state)
+    return state, company
+
+
+def _ensure_specialist(company_id: str, skill: dict, sector: str = "", urgent: bool = False) -> dict:
+    """Toda habilidade tem um funcionario especialista; cria se faltar."""
+    if skill.get("specialistId"):
+        return skill
+    state, company = _organized(company_id)
+    member_id = f"especialista-{skill['id']}"[:120]
+    if not any(member.id == member_id for member in company.members):
+        home = sector or next(item.id for item in company.departments if org.fold(item.name) == org.HOME_SECTOR)
+        company.members.append(Member(id=member_id, name=f"Especialista em {skill['name']}"[:120], role="Especialista da habilidade", departmentId=home))
+        _write_state(state)
+    manager = org.manager_of(company, next(member.departmentId for member in company.members if member.id == member_id))
+    changes = {"specialistId": member_id, "managerId": manager.id if manager else ""}
+    updated = store.update_skill(company_id, skill["id"], changes, "Especialista criado")
+    _start_study(company_id, company, updated, urgent)
+    return updated
+
+
+def _start_study(company_id: str, company, skill: dict, urgent: bool = False) -> None:
+    """Regra geral: todo especialista nasce estudando a propria funcao."""
+    def finished(result: dict) -> None:
+        if result["estado"] != "pronto":
+            return
+        done = org.write_from_study(company_id, store.get_skill(company_id, skill["id"]))
+        knowledge.mark(company_id, skill["id"], resumo="pronto" if done else "pendente")
+
+    knowledge.enqueue(company_id, skill["id"], org.study_topic(company, skill), finished, urgent=urgent)
+
+
+PHOTO_SKILL = "Organização de fotos"
+_PHOTO_STEPS = ["Receber as fotos do imóvel vindas do especialista de cadastro.", "Identificar o ambiente de cada foto.", "Separar as fotos repetidas, sem apagar o arquivo.",
+                "Colocar as fotos na sequência configurada para o tipo de imóvel.", "Apontar as fotos em dúvida e aguardar a decisão do dono.", "Entregar a ordem final ao especialista de cadastro."]
+_PHOTO_RULES = ["Nunca apagar fotografias sem autorização.", "Preservar os arquivos originais.", "Não alterar as características reais das fotografias.",
+                "Usar a sequência da empresa, nunca a ordem do WhatsApp.", "Só mudar as regras de ordem com autorização do dono."]
+
+
+def _hire_photo_specialists(state) -> None:
+    """Quem cadastra imoveis ganha um especialista para cuidar das fotos."""
+    for company in state.companies:
+        names = [org.fold(skill["name"]) for skill in store.list_skills(company.id)]
+        dealer = "imob" in org.fold(company.segment) or any("imove" in name for name in names)
+        if org.fold(PHOTO_SKILL) in names or not dealer:
+            continue
+        skill = store.create_skill(company.id, company.name, {"name": PHOTO_SKILL, "whenToUse": "Quando um imóvel chegar com fotos para cadastrar.", "steps": _PHOTO_STEPS, "rules": _PHOTO_RULES})
+        _ensure_specialist(company.id, skill)
+
+
+def _study_everyone(state) -> int:
+    """Quem ja existia e ainda nao sabe nada tambem vai estudar."""
+    started = 0
+    for company in state.companies:
+        skills = store.list_skills(company.id)
+        taught = {skill.get("specialistId") for skill in skills}
+        for person in company.members:
+            if person.kind == "especialista" and person.id not in taught:
+                name = re.sub(r"^Especialista em ", "", person.name)
+                try:
+                    created = store.create_skill(company.id, company.name, {"name": name, "whenToUse": person.role, "category": person.departmentId})
+                except ValueError:
+                    continue
+                manager = org.manager_of(company, person.departmentId)
+                skills.append(store.update_skill(company.id, created["id"], {"specialistId": person.id, "managerId": manager.id if manager else ""}, "Especialista ja existente"))
+        for skill in skills:
+            if knowledge.needs_study(company.id, skill["id"]):
+                _start_study(company.id, company, skill)
+                started += 1
+            elif knowledge.status(company.id, skill["id"]).get("resumo") != "pronto":
+                _finish_summary(company.id, skill)
+    return started
+
+
+def _finish_summary(company_id: str, skill: dict) -> None:
+    def finished(_result: dict) -> None:
+        done = org.write_from_study(company_id, store.get_skill(company_id, skill["id"]))
+        knowledge.mark(company_id, skill["id"], resumo="pronto" if done else "pendente")
+
+    knowledge.enqueue(company_id, skill["id"], "", finished, only_finish=True)
+
+
 def _guarded(call, *args):
     try:
         return call(*args)
@@ -69,13 +169,13 @@ def _guarded(call, *args):
 @router.get("")
 def list_company_skills(company_id: str) -> dict:
     _company_name(company_id)
-    return {"skills": _guarded(store.list_skills, company_id)}
+    return {"skills": [_ensure_specialist(company_id, skill) for skill in _guarded(store.list_skills, company_id)]}
 
 
 @router.post("", status_code=201)
 def create_company_skill(company_id: str, body: SkillFields) -> dict:
     name = _company_name(company_id)
-    return _guarded(store.create_skill, company_id, name, body.model_dump(exclude={"note"}))
+    return _ensure_specialist(company_id, _guarded(store.create_skill, company_id, name, body.model_dump(exclude={"note"})))
 
 
 @router.post("/archive", status_code=201)
@@ -230,6 +330,25 @@ class PhotoOrder(BaseModel):
     ambientes: dict[str, str] = Field(default_factory=dict)
 
 
+class CompanyTaskBody(BaseModel):
+    texto: str = Field(min_length=1, max_length=_MAX_TEXT)
+    membro: str = Field(default="", max_length=240)
+
+
+class NewFunction(BaseModel):
+    nome: str = Field(min_length=1, max_length=240)
+    quando_usar: str = Field(default="", max_length=_MAX_TEXT)
+
+
+class MemberEdit(BaseModel):
+    nome: str = Field(min_length=1, max_length=120)
+    cargo: str = Field(default="", max_length=120)
+
+
+class AgentRun(BaseModel):
+    salvar: bool = False
+
+
 class KenloRun(BaseModel):
     key: str = Field(min_length=1, max_length=120)
     salvar: bool = False
@@ -291,6 +410,20 @@ def _ordered_photos(item: dict) -> dict:
             "avisos": result["avisos"] + result["duvidas"], "ambientes": list(order.SEQUENCES[kind])}
 
 
+@voice_router.get("/imoveis/fotos/painel")
+def photo_panel() -> dict:
+    """O que o Especialista em Fotos esta cuidando."""
+    from dodaios.core import cadastro_plan as plan, photo_order as order, property_intake as intake
+
+    try:
+        corrections = len(order.load_memory(plan.load_rules()["empresa"]).get("correcoes", {}))
+    except (OSError, ValueError, KeyError):
+        corrections = 0
+    items = [{"chave": item["chave"], "titulo": item.get("titulo") or item["chave"], "status": item.get("status", ""), "aprovada": bool(item.get("ordem_fotos")), **item.get("analise_fotos", {})}
+             for item in intake.all_items() if item.get("fotos") and item.get("analise_fotos")]
+    return {"correcoes": corrections, "itens": items[-12:]}
+
+
 @voice_router.get("/imoveis/{key}/fotos")
 def property_photos(key: str) -> dict:
     from dodaios.core import property_intake as intake
@@ -334,6 +467,243 @@ def save_photo_order(key: str, body: PhotoOrder) -> dict:
         order.correct(company, order.fingerprint(Path(by_name[name]))["sha"], room)
     intake.update(key, ordem_fotos=[by_name[name] for name in body.ordem])
     return {"ok": True}
+
+
+@voice_router.post("/empresas/organizar")
+def organize_all_companies() -> dict:
+    """Aplica a regra geral a todas as empresas, antigas e novas."""
+    state = _read_state()
+    changed = [org.ensure_structure(company, Department, Member) for company in state.companies]
+    if any(changed):
+        _write_state(state)
+    _hire_photo_specialists(state)
+    return {"alteradas": sum(changed), "estudando": _study_everyone(_read_state())}
+
+
+@voice_router.get("/empresa/{company_id}/organizacao")
+def company_organization(company_id: str) -> dict:
+    return org.organization(_organized(company_id)[1])
+
+
+def create_researched_specialist(company_id: str, topic: str, sector: str = "", urgent: bool = False) -> dict:
+    """O gerente do setor cria o especialista e ele vai estudar na internet."""
+    state, company = _organized(company_id)
+    sector = sector or org.sector_for(company, topic)
+    manager = org.manager_of(company, sector)
+    small = {"de", "do", "da", "dos", "das", "e", "em"}
+    name = " ".join(word if word.isupper() or word in small else word[:1].upper() + word[1:] for word in topic.split())
+    skill = next((item for item in store.list_skills(company_id) if org.fold(item["name"]) == org.fold(name)), None)
+    if skill is None:
+        skill = store.create_skill(company_id, company.name, {
+            "name": name, "category": sector, "whenToUse": f"Duvidas e tarefas sobre {topic}.",
+            "rules": ["Responder somente com as fontes estudadas e citar a origem.", "Se nao estiver nas fontes, dizer que nao encontrou."]})
+    skill = _ensure_specialist(company_id, skill, sector, urgent)
+
+    person = next(item for item in _company(_read_state(), company_id).members if item.id == skill["specialistId"])
+    if knowledge.needs_study(company_id, skill["id"]):
+        _start_study(company_id, company, skill, urgent)
+    return {"rota": [item for item in dict.fromkeys(("Gerente Geral", manager.name if manager else "", person.name)) if item], "setor": sector,
+            "membro": person.id, "habilidade": skill["id"], "criado": person.name, "agente": False, "prompt": ""}
+
+
+def answer_company_request(text: str) -> str | None:
+    """No chat: 'crie um especialista em ...' vale para a empresa ativa."""
+    topic = org.wants_specialist(text)
+    if not topic:
+        return None
+    state = _read_state()
+    company_id = state.activeCompanyId or (state.companies[0].id if state.companies else "")
+    if not company_id:
+        return None
+    result = create_researched_specialist(company_id, topic)
+    return f"{result['rota'][-2]} criou {result['criado']}. Ele esta pesquisando na internet agora e fica disponivel quando terminar."
+
+
+@voice_router.post("/empresa/{company_id}/tarefa")
+def new_company_task(company_id: str, body: CompanyTaskBody) -> dict:
+    """Passa a tarefa pelos gerentes; imoveis usam o agente, o resto vira missao."""
+    from dodaios.core import property_agent
+
+    topic = org.wants_specialist(body.texto)
+    if topic:
+        sector = next((item.departmentId for item in _organized(company_id)[1].members if item.id == body.membro), "")
+        return create_researched_specialist(company_id, topic, sector)
+    state, company = _organized(company_id)
+    route = org.route_task(company, body.texto, body.membro)
+    company.tasks.insert(0, CompanyTask(id=f"task-{uuid4().hex[:12]}", title=body.texto[:90], description=body.texto, assigneeId=route["membro"] or None, departmentId=route["setor"] or None, status="andamento"))
+    _write_state(state)
+    if route["agente"]:
+        try:
+            property_agent.start(property_agent.can_save())
+            route["iniciado"] = True
+        except RuntimeError as exc:
+            route["aviso"] = str(exc)
+    return route
+
+
+class ChatMessage(BaseModel):
+    texto: str = Field(min_length=1, max_length=_MAX_TEXT)
+
+
+def _answer_after_study(company_id: str, question: str, created: dict) -> None:
+    """Quando o novo especialista termina de estudar, a resposta entra na conversa."""
+    def deliver(result: dict) -> None:
+        if result["estado"] != "pronto":
+            chat.add(company_id, "empresa", f"{created['criado']} procurou, mas não achou fontes sobre isso. Me ensine ou tente perguntar de outro jeito.", rota=created["rota"])
+            return
+        found = knowledge.answer(company_id, created["habilidade"], created["criado"], question)
+        chat.add(company_id, "empresa", found["resposta"], rota=created["rota"], fontes=found["fontes"])
+
+    if not knowledge.when_ready(company_id, created["habilidade"], deliver):
+        deliver(knowledge.status(company_id, created["habilidade"]))
+
+
+def _ask_company(company_id: str, company, text: str) -> dict:
+    from dodaios.core import property_agent
+
+    data = property_agent.answer_property_request(text)
+    if data:
+        return {"texto": data, "rota": ["Gerente Geral", "Especialista em imóveis"]}
+    found = org.find_answer(company, text)
+    if found:
+        return {"texto": found["resposta"], "rota": found["rota"], "fontes": found["fontes"]}
+    plan = org.plan_new_specialist(company, text)
+    if not plan["internet"]:
+        return {"texto": "Isso depende de dados internos que nenhum setor tem ainda. Me passe a informação ou ensine o setor responsável.", "rota": ["Gerente Geral"]}
+    created = create_researched_specialist(company_id, plan["tema"], plan["setor"], urgent=True)
+    sector = next((item.name for item in company.departments if item.id == created["setor"]), created["setor"])
+    _answer_after_study(company_id, text, created)
+    return {"texto": f"Ninguém sabia responder ainda. {created['criado']} está em {sector} e já vai estudar; a resposta chega aqui.", "rota": created["rota"], "pendente": created["habilidade"]}
+
+
+@voice_router.get("/empresa/{company_id}/conversa")
+def company_conversation(company_id: str) -> dict:
+    messages = chat.history(company_id)
+    open_studies = {item["pendente"] for item in messages if item.get("pendente")}
+    return {"mensagens": messages, "estudando": any(knowledge.status(company_id, skill)["estado"] in ("aguardando", "pesquisando") for skill in open_studies)}
+
+
+@voice_router.post("/empresa/{company_id}/conversa")
+def talk_to_company(company_id: str, body: ChatMessage) -> dict:
+    """O dono fala com a empresa: pergunta vira resposta e ordem vira tarefa."""
+    _state, company = _organized(company_id)
+    chat.add(company_id, "voce", body.texto)
+    topic = org.wants_specialist(body.texto)
+    if org.is_question(body.texto) and not topic:
+        reply = _ask_company(company_id, company, body.texto)
+        chat.add(company_id, "empresa", reply.pop("texto"), **reply)
+        return {"ok": True}
+    route = new_company_task(company_id, CompanyTaskBody(texto=body.texto))
+    if route.get("criado"):
+        chat.add(company_id, "empresa", f"{route['criado']} foi criado e já vai estudar.", rota=route["rota"], pendente=route["habilidade"])
+    elif route.get("resposta"):
+        chat.add(company_id, "empresa", route["resposta"], rota=route["rota"], fontes=route.get("fontes", []))
+    elif route.get("agente"):
+        chat.add(company_id, "empresa", route.get("aviso") or "O agente começou. Acompanhe na ficha do especialista.", rota=route["rota"])
+    else:
+        chat.add(company_id, "empresa", "Tarefa encaminhada. Acompanhe em Tarefas.", rota=route["rota"])
+        return {"missao": route["prompt"]}
+    return {"ok": True}
+
+
+@voice_router.post("/empresa/{company_id}/departamento")
+def add_department(company_id: str, body: NewFunction) -> dict:
+    """Departamento novo ja nasce com gerente, como os outros."""
+    state = _read_state()
+    company = _company(state, company_id)
+    slug = re.sub(r"[^a-z0-9]+", "-", org.fold(body.nome)).strip("-")[:60] or "departamento"
+    if any(org.fold(item.name) == org.fold(body.nome) or item.id == slug for item in company.departments):
+        raise HTTPException(status_code=409, detail="Esse departamento ja existe")
+    company.departments.append(Department(id=slug, name=body.nome[:120], floor=len(company.departments) + 1, mission=body.quando_usar or f"Funcoes de {body.nome}."))
+    org.ensure_structure(company, Department, Member)
+    _write_state(state)
+    return {"id": slug}
+
+
+@voice_router.post("/empresa/{company_id}/setor/{sector}/aprender")
+def teach_sector(company_id: str, sector: str, body: NewFunction) -> dict:
+    """O gerente cria o especialista da funcao dentro do proprio setor."""
+    _state, company = _organized(company_id)
+    manager = org.manager_of(company, sector)
+    if manager is None:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado")
+    skill = _guarded(store.create_skill, company_id, company.name, {"name": body.nome, "whenToUse": body.quando_usar, "category": sector})
+    return _ensure_specialist(company_id, skill, sector)
+
+
+@voice_router.post("/empresa/{company_id}/setor/{sector}/montar-equipe")
+def build_sector_team(company_id: str, sector: str) -> dict:
+    """O gerente descobre o que o setor faz e cria os especialistas que faltam."""
+    _state, company = _organized(company_id)
+    if org.manager_of(company, sector) is None:
+        raise HTTPException(status_code=404, detail="Setor nao encontrado")
+    proposals = org.propose_team(company, sector)
+    created = []
+    for item in proposals:
+        skill = store.create_skill(company_id, company.name, {
+            "name": str(item["nome"])[:200], "whenToUse": str(item.get("quando_usar", ""))[:_MAX_TEXT], "category": sector,
+            "steps": [str(step) for step in item.get("passos", [])][:_MAX_LIST], "rules": [str(rule) for rule in item.get("regras", [])][:_MAX_LIST]})
+        created.append(_ensure_specialist(company_id, skill, sector)["name"])
+    return {"criados": created, "basico": any(item.get("base") for item in proposals)}
+
+
+@voice_router.post("/empresa/{company_id}/habilidade/{skill_id}/estudar")
+def study_again(company_id: str, skill_id: str) -> dict:
+    """Atualiza o conhecimento: procura de novo as fontes, sem perder as atuais."""
+    _state, company = _organized(company_id)
+    _start_study(company_id, company, _guarded(store.get_skill, company_id, skill_id))
+    return {"ok": True}
+
+
+@voice_router.patch("/empresa/{company_id}/funcionario/{member_id}")
+def edit_member(company_id: str, member_id: str, body: MemberEdit) -> dict:
+    state = _read_state()
+    person = next((item for item in _company(state, company_id).members if item.id == member_id), None)
+    if person is None:
+        raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
+    person.name = body.nome
+    person.role = body.cargo or person.role
+    _write_state(state)
+    return {"ok": True}
+
+
+@voice_router.delete("/empresa/{company_id}/funcionario/{member_id}")
+def dismiss_member(company_id: str, member_id: str) -> dict:
+    """Demitir apaga o funcionario e as habilidades dele. Gerentes ficam."""
+    state = _read_state()
+    company = _company(state, company_id)
+    person = next((item for item in company.members if item.id == member_id), None)
+    if person is None:
+        raise HTTPException(status_code=404, detail="Funcionario nao encontrado")
+    if person.kind == "gerente":
+        raise HTTPException(status_code=422, detail="Todo setor precisa de um gerente")
+    removed = [skill["id"] for skill in store.list_skills(company_id) if skill.get("specialistId") == member_id]
+    for skill_id in removed:
+        store.delete_skill(company_id, skill_id)
+    company.members = [item for item in company.members if item.id != member_id]
+    remember_fired(member_id)
+    _write_state(state)
+    return {"habilidades_apagadas": len(removed)}
+
+
+@voice_router.get("/imoveis/agente")
+def property_agent_panel() -> dict:
+    from dodaios.core import property_agent
+
+    return property_agent.panel()
+
+
+@voice_router.post("/imoveis/agente")
+def run_property_agent(body: AgentRun) -> dict:
+    from dodaios.core import property_agent
+
+    try:
+        property_agent.start(body.salvar)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return property_agent.panel()
 
 
 @voice_router.post("/imoveis/kenlo")

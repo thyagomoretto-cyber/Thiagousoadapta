@@ -127,7 +127,7 @@ def parse_sheet(text: str) -> dict[str, Any]:
     for field, pattern in _COUNTS.items():
         # A ficha escreve "Qnt suites: 1" ou "1 suite".
         found = re.search(rf"\b(?:qnt|qtd|quantidade)\b[ .]*(?:de\s+)?{pattern}\s*:?\s*(\d{{1,3}})\b", folded) or re.search(rf"\b(\d{{1,3}})\s+{pattern}\b", folded)
-        counts[field] = found.group(1) if found else ""
+        counts[field] = found.group(1).lstrip("0") or "0" if found else ""
     return {
         "codigo": code.group(1) if code else "",
         "condominio_nome": "" if re.search(r"\d|r\$", _fold(condo)) or re.fullmatch(r"(nao|nenhum|sem|nao tem|n/?a|-+)\.?", _fold(condo).strip()) else condo,

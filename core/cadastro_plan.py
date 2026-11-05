@@ -28,6 +28,7 @@ COUNTED: Final[tuple[tuple[str, str], ...]] = (("dormitorios", "dormitórios"), 
 ITEM_WORDS: Final[dict[str, str]] = {"Ar condicionado": r"ar[- ]condicionado|\bsplit\b", "Calefação": r"calefac", "Depósito": r"deposito", "Divisória": r"divisoria",
                                      "Elevador": r"elevador", "Gerador": r"gerador", "Portão eletrônico": r"portao eletronico", "Mobiliado": r"(?<!semi)(?<!semi-)mobiliad", "Semi-Mobiliado": r"semi-?mobiliad", "Aquecimento de água à gás": r"aquecimento.{0,20}gas|gas central",
                                      "Área de serviço": r"area de servico", "Pé direito duplo": r"pe[- ]direito duplo"}
+ELEVATOR_ABOVE: Final[int] = 4
 AD_REQUEST: Final[str] = ("Gere um texto para utilizarmos como anuncio no meu site deste imovel, nao coloque endereco, valor e proprietario. "
                           "Neste caso e {kind} para {purpose}. Comece pelo maior diferencial e destaque todos os pontos fortes, em texto persuasivo e facil de ler. "
                           "Use somente os dados abaixo, sem inventar nada e sem marcacao.")
@@ -163,9 +164,15 @@ def written_items(item: dict[str, Any], sheet: dict[str, Any]) -> list[str]:
     return [name for name in VISIBLE_ITEMS if re.search(ITEM_WORDS.get(name, re.escape(_fold(name))), text)]
 
 
+def needs_elevator(sheet: dict[str, Any]) -> list[str]:
+    """Predio com mais de 4 andares sempre tem elevador."""
+    floors = [str(sheet.get("andares") or ""), str(sheet.get("andar") or ""), floor_of(str(sheet.get("apartamento") or ""))]
+    return ["Elevador"] if max(int(re.sub(r"\D", "", value) or 0) for value in floors) > ELEVATOR_ABOVE else []
+
+
 def seen_items(sheet: dict[str, Any], check: list[str]) -> list[dict[str, Any]]:
     """Itens vistos nas fotos: marca se o campo existir e pede conferencia."""
-    items = list(dict.fromkeys([*sheet.get("itens_ficha", []), *sheet.get("itens_fotos", []), *sheet.get("itens_condominio", [])]))
+    items = list(dict.fromkeys([*sheet.get("itens_ficha", []), *sheet.get("itens_fotos", []), *sheet.get("itens_condominio", []), *needs_elevator(sheet)]))
     if items:
         check.append(f"Marcado pela ficha e pelas fotos: {', '.join(items)}. Confira.")
     return [{**_step("Detalhes", name, "marcar", True), "opcional": True} for name in items]

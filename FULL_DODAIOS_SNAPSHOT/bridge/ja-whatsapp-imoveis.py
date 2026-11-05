@@ -83,6 +83,11 @@ FIRST_IMAGE_JS = """(id) => {
   return [...(node ? node.querySelectorAll('img') : [])].find((image) => image.naturalWidth > 60 || image.width > 60) || null;
 }"""
 
+SHOWN_PHOTO_JS = """() => {
+  const area = (image) => { const box = image.getBoundingClientRect(); return box.width * box.height; };
+  return [...document.querySelectorAll("img[src^='blob:']")].filter((image) => area(image) > 0).sort((a, b) => area(b) - area(a))[0]?.src || '';
+}"""
+
 SAVE_LARGEST_JS = """async () => {
   const area = (image) => { const box = image.getBoundingClientRect(); return box.width * box.height; };
   const images = [...document.querySelectorAll("img[src^='blob:']")].filter((image) => area(image) > 0).sort((a, b) => area(b) - area(a));
@@ -247,9 +252,13 @@ def save_photos(page, message_id: str, count: int, folder: Path, first_number: i
     page.wait_for_timeout(VIEWER_WAIT_MS)
     # O visualizador mostra "3 de 8": pode abrir no meio do album, entao volta ao comeco.
     place, total = viewer_place(page)
+    opened = page.evaluate(SHOWN_PHOTO_JS)
     for _ in range(max(place - 1, 0)):
         page.keyboard.press("ArrowLeft")
         wait_place(page, viewer_place(page)[0] - 1)
+    limit = time.monotonic() + PHOTO_WAIT_S
+    while place > 1 and page.evaluate(SHOWN_PHOTO_JS) == opened and time.monotonic() < limit:
+        page.wait_for_timeout(200)  # sem isso a foto antiga era salva no lugar da primeira
     count = total or count
     seen: set[str] = set()
     missed = 0

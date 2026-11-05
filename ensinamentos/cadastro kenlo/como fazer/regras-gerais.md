@@ -55,3 +55,7 @@ A mensagem "Imóvel cadastrado com a referência" confirma o cadastro. Não é p
 ## Proprietário já cadastrado
 
 Ao digitar o telefone, responda Sim em "Utilizar dados deste cliente". A Mídia de origem vem do cadastro existente e fica travada: não mexa nela.
+
+## Elevador e itens
+
+Prédio com mais de 4 andares sempre marca Elevador. Marque todos os itens citados na descrição e também os que aparecerem nas fotos.

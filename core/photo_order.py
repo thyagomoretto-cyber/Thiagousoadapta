@@ -71,6 +71,8 @@ VISIBLE_ITEMS: Final[tuple[str, ...]] = (
     "Alarme", "Aquecimento de água à gás", "Ar condicionado", "Calefação", "Churrasqueira", "Closet", "Copa", "Depósito", "Despensa", "Divisória", "Elevador", "Escritório",
     "Gerador", "Hidromassagem", "Interfone", "Lareira", "Lavabo", "Lavanderia", "Mezanino", "Mobiliado", "Piscina", "Playground", "Portão eletrônico", "Pé direito duplo",
     "Quintal", "Recepção", "Refeitório", "Sacada", "Semi-Mobiliado", "Varanda", "Vestiário", "Zelador", "Área de serviço",
+    "Academia", "Adega", "Aceita Pet", "Campo de futebol", "Dorm. Empregada", "Ban. de empregada", "Internet", "Jardim de inverno", "Ofurô", "Placas fotovoltaicas", "Quadra de Tênis",
+    "Quadra Poliesportiva", "Salão de festas", "Sauna", "Terraço", "TV a cabo", "Varanda gourmet",
 )
 # O minimo para o anuncio ficar completo: faltando, avisa antes de publicar.
 ESSENTIALS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
@@ -170,7 +172,8 @@ def photo_findings(photos: list[dict[str, Any]]) -> dict[str, list[str]]:
     """O que o seletor viu nas fotos, para quem preenche o cadastro."""
     sure = [photo for photo in photos if photo.get("confianca", 0) >= SURE_ROOM and not photo["ambiente"].startswith("condominio")]
     rooms = [box for photo in sure if photo.get("mobiliado") for word, box in FURNISHED_ROOMS if photo["ambiente"].startswith(word)]
-    return {"mobilia": list(dict.fromkeys(rooms)), "itens": list(dict.fromkeys(name for photo in sure for name in photo.get("itens", []))),
+    present = [box for photo in sure for word, box in FURNISHED_ROOMS if photo["ambiente"].startswith(word)]
+    return {"mobilia": list(dict.fromkeys(rooms)), "ambientes": list(dict.fromkeys(present)), "itens": list(dict.fromkeys(name for photo in sure for name in photo.get("itens", []))),
             "pisos": list(dict.fromkeys(photo["piso"] for photo in sure if photo.get("piso")))}
 
 

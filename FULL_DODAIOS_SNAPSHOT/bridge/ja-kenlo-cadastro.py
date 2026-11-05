@@ -108,6 +108,10 @@ SEARCH_JS = r"""
 }
 """
 TEXT_TYPES = ["input:text", "input:tel", "input:number", "input:email", "input:search", "input:", "textarea:textarea"]
+# Mapa conferido na tela real: pelo rotulo o agente caia em copias escondidas do formulario.
+FIELD_IDS = {"*Dormitórios": "in_dorm", "Suites": "in_suites", "Nº de banheiros": "in_banheiros", "Nº de salas": "in_salas", "Nº de andares": "in_andares", "Nº do andar": "in_andar",
+             "*Tipo de Comissão:": "cboComissaoTipo_0", "*Corretor:": "cboCorretorComissao_0", "*Nome do proprietário:": "txProprietario", "*Mídia de origem:": "cboClienteMidia",
+             "*Finalidade:": "cboFinalidade", "*Tipo:": "cboTipo", "*Área útil:": "txAreaUtil", "Área total:": "txAreaTotal", "Valor do condomínio:": "txValorCondominio"}
 CLEAR_FORBIDDEN_JS = r"""
 () => [...document.querySelectorAll('input, textarea')].filter((node) => node.value && !/checkbox|radio|hidden/.test(node.type) && window.__ja.forbidden(node)).map((node) => {
   node.value = '';
@@ -248,6 +252,9 @@ class Form:
     def _control(self, section: str, field: str, types: list[str], wait_ms: int = FIELD_WAIT_MS):
         limit = time.monotonic() + wait_ms / 1000
         while True:
+            exact = self.page.query_selector(f"#{FIELD_IDS[field]}") if field in FIELD_IDS else None
+            if exact:
+                return exact
             self.page.evaluate(SEARCH_JS)
             handle = self.page.evaluate_handle("([s, f, t]) => window.__ja.control(s, f, t)", [section, field, types]).as_element()
             if handle or time.monotonic() > limit:
@@ -316,6 +323,7 @@ class Form:
 
     def choose(self, section: str, field: str, value: str) -> None:
         """Finalidade e Tipo ficam travados ate carregar: espera e confere o que ficou."""
+        value = "Nenhuma" if field == "Suites" and not value.strip("0 ") else value
         limit = time.monotonic() + SELECT_WAIT_S
         appears = time.monotonic() + SELECT_APPEARS_S
         while True:
@@ -812,6 +820,8 @@ def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     if len(rooms) >= FURNISHED_MIN and not sheet["mobiliado"]:
         seen["mobiliado"] = True
         notes.append("Mobiliado pelas fotos. Confira.")
+    if seen["mobiliado"]:  # o modelo ve poucos moveis: a ficha manda e vale para os ambientes das fotos
+        rooms = list(dict.fromkeys([*rooms, *findings.get("ambientes", [])]))
     if rooms or findings.get("itens"):
         notes.append(f"Seletor de fotos: móveis em {', '.join(rooms) or 'nenhum ambiente'}; itens: {', '.join(findings.get('itens', [])) or 'nenhum'}.")
     details = {**details, "piso": list(dict.fromkeys([*details["piso"], *findings.get("pisos", [])])), "itens": list(dict.fromkeys([*details["itens"], *findings.get("itens", [])]))}

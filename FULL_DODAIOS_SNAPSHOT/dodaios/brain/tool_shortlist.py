@@ -73,6 +73,7 @@ CORE_PRIORITY: Final[tuple[str, ...]] = (
     "describe_app_settings",
     "navigate",
     "create_artifact",
+    "ask_owner",
     "delegate_to_agent",
     "message_agent",
     "society_status",

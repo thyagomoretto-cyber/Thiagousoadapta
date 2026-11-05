@@ -855,11 +855,61 @@
     if (!box || !box.isConnected) return;
     clearTimeout(state.chatTimer);
     const data = await api(chatUrl());
+    state.chatTimer = setTimeout(() => refreshChat().catch(() => {}), data.estudando ? 4000 : 10000);
+    const stamp = JSON.stringify(data.mensagens.slice(-3)) + data.mensagens.length;
+    if (stamp === state.chatStamp) return;
+    state.chatStamp = stamp;
     const list = box.querySelector('[data-testid="conversa-lista"]');
     const opening = el("div", { textContent: "Pergunte, peça ou mande fazer. O Gerente Geral busca com quem sabe.", style: { fontSize: "12px", color: colors.muted } });
     list.replaceChildren(...(data.mensagens.length ? data.mensagens.map(chatBubble) : [opening]));
     list.scrollTop = list.scrollHeight;
-    if (data.estudando) state.chatTimer = setTimeout(() => refreshChat().catch(() => {}), 4000);
+  }
+
+  // Vale em qualquer tela do app: qualquer agente pode precisar do dono.
+  let questionCard = null;
+
+  function showQuestion(question) {
+    const id = question ? question.id : "";
+    if (questionCard && questionCard.dataset.id === id) return;
+    if (questionCard) questionCard.remove();
+    questionCard = null;
+    if (!question) return;
+    const small = { minHeight: "16px", marginTop: "4px", fontSize: "12px", color: colors.muted };
+    const status = el("div", { style: small });
+    const field = el("textarea", { rows: 1, name: "resposta-agente", placeholder: "Responda aqui ou clique em Falar", style: { ...fieldStyle, flex: "1", resize: "none" } });
+    const reply = async (texto) => {
+      if (!texto.trim()) return;
+      status.textContent = "Enviando...";
+      try {
+        await api("/api/company-voice/pergunta/responder", { method: "POST", body: { texto } });
+        showQuestion(null);
+      } catch (error) {
+        status.textContent = `Não consegui enviar: ${error.message}`;
+      }
+    };
+    const talk = button("Falar", async () => {
+      await record(field, talk).catch((error) => { status.textContent = error.message; });
+      if (!state.recorder && field.value.trim()) reply(field.value);
+    });
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); reply(field.value); }
+    });
+    const card = el("div", { style: { width: "min(520px, 100%)", maxHeight: "100%", overflowY: "auto", boxSizing: "border-box", padding: "20px", borderRadius: "16px", border: `2px solid ${colors.main}`, background: colors.bg, color: colors.text, boxShadow: "0 16px 60px rgba(0,0,0,.6)", fontSize: "14px" } }, [
+      el("div", { textContent: "O agente precisa de você", style: { fontSize: "16px", fontWeight: "600" } }),
+      el("div", { textContent: question.texto, style: { marginTop: "8px", whiteSpace: "pre-wrap" } }),
+      ...(question.imagem ? [el("img", { src: `/api/company-voice/pergunta/imagem?id=${id}`, alt: "Tela do agente", style: { display: "block", maxWidth: "100%", maxHeight: "220px", marginTop: "8px", borderRadius: "8px", border: `1px solid ${colors.line}` } })] : []),
+      ...(question.opcoes.length ? [row(question.opcoes.map((text) => button(text, () => reply(text))))] : []),
+      el("div", { style: { display: "flex", gap: "8px", alignItems: "flex-end", marginTop: "8px" } }, [field, talk, button("Enviar", () => reply(field.value), true)]), status]);
+    questionCard = el("section", { style: { position: "fixed", inset: "0", zIndex: "2147483000", display: "flex", alignItems: "center", justifyContent: "center", boxSizing: "border-box", padding: "16px", background: "rgba(0,0,0,.65)" } }, [card]);
+    questionCard.dataset.testid = "pergunta-agente";
+    questionCard.dataset.id = id;
+    document.body.append(questionCard);
+  }
+
+  function watchQuestions() {
+    const check = () => api("/api/company-voice/pergunta").then((data) => showQuestion(data.na_janela ? null : data.pergunta)).catch(() => {});
+    check();
+    setInterval(check, 4000);
   }
 
   function chatPanel() {
@@ -867,8 +917,8 @@
     list.dataset.testid = "conversa-lista";
     const field = el("textarea", { rows: 1, name: "conversa", placeholder: "Fale com a empresa...", value: remembered(), style: { ...fieldStyle, flex: "1", resize: "none" } });
     const status = el("div", { style: { minHeight: "16px", marginTop: "4px", fontSize: "12px", color: colors.muted } });
-    const send = async () => {
-      const texto = field.value.trim();
+    const send = async (spoken) => {
+      const texto = (typeof spoken === "string" ? spoken : field.value).trim();
       if (!texto || field.disabled) return;
       field.disabled = true;
       status.textContent = "A empresa está respondendo...";
@@ -876,8 +926,7 @@
       list.scrollTop = list.scrollHeight;
       try {
         const reply = await api(chatUrl(), { method: "POST", body: { texto } });
-        field.value = "";
-        remember("");
+        if (typeof spoken !== "string") { field.value = ""; remember(""); }
         if (reply.missao) await sendMission(reply.missao, "Tarefa encaminhada.");
         status.textContent = "";
       } catch (error) {
@@ -891,9 +940,13 @@
     field.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
     });
+    const talk = button("Falar", async () => {
+      await record(field, talk).catch((error) => { status.textContent = error.message; });
+      if (!state.recorder && field.value.trim()) send();
+    });
     const box = el("section", { style: { padding: "12px 16px", borderRadius: "16px", border: `1px solid ${colors.line}`, background: colors.bg, color: colors.text } }, [
       el("div", { textContent: "Conversar com a empresa", style: { fontSize: "14px", fontWeight: "600" } }), list,
-      el("div", { style: { display: "flex", gap: "8px", alignItems: "flex-end", marginTop: "8px" } }, [field, button("Enviar", send, true)]), status]);
+      el("div", { style: { display: "flex", gap: "8px", alignItems: "flex-end", marginTop: "8px" } }, [field, talk, button("Enviar", send, true)]), status]);
     box.dataset.testid = "conversa-empresa";
     return box;
   }
@@ -977,4 +1030,5 @@
     setTimeout(() => { waiting = false; attach(); }, 250);
   }).observe(document.documentElement, { childList: true, subtree: true });
   attach();
+  watchQuestions();
 })();

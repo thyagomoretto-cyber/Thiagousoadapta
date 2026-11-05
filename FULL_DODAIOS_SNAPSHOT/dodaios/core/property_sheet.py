@@ -25,6 +25,10 @@ _COUNTS: Final[dict[str, str]] = {
 }
 
 
+_FLOORS: Final[dict[str, str]] = {"Porcelanato": "porcelanato", "Cerâmica": "ceramica", "Laminado": "laminado", "Vinílico": "vinilico", "Mármore": "marmore", "Granito": "granito",
+                                  "Carpete": "carpete", "Cimento queimado": "cimento queimado", "Taco de madeira": "taco", "Piso frio": "piso frio"}
+
+
 def _fold(text: str) -> str:
     plain = unicodedata.normalize("NFKD", text or "")
     return "".join(c for c in plain if not unicodedata.combining(c)).lower()
@@ -125,7 +129,11 @@ def parse_sheet(text: str) -> dict[str, Any]:
         counts[field] = found.group(1) if found else ""
     return {
         "codigo": code.group(1) if code else "",
-        "condominio_nome": "" if re.search(r"\d|r\$", _fold(condo)) else condo,
+        "condominio_nome": "" if re.search(r"\d|r\$", _fold(condo)) or re.fullmatch(r"(nao|nenhum|sem|nao tem|n/?a|-+)\.?", _fold(condo).strip()) else condo,
+        "pisos": sorted({name for line in folded.splitlines() if "piso" in line or "porcelanato" in line or "laminado" in line or "vinilico" in line
+                         for name, word in _FLOORS.items() if word in line}),
+        "andar": (re.search(r"\b(\d{1,3})\s*[ºo°]?\s*andar\b", folded) or [None, ""])[1],
+        "observacao": " ".join(line.strip("() ") for line in lines if re.fullmatch(r"\(.+\)", line.strip())),
         "vagas_cobertas": covered.group(1) if covered else "",
         "vagas_descobertas": open_air.group(1) if open_air else "",
         "bairro": neighborhood,

@@ -34,7 +34,11 @@ SEARCH = (
 )
 CHATS_WAIT_MS = 45_000
 NEW_PROPERTY = re.compile(r"\bc[oó]digo\b", re.IGNORECASE)
-SCROLLS = 12
+MAX_PAGES = 40
+SYNC_WAIT_S = 120
+STILL_ROUNDS = 3
+WHEEL_PIXELS = 500
+WHEEL_WAIT_MS = 900
 VIEWER_WAIT_MS = 1_500
 
 # O WhatsApp muda a estrutura da pagina: sem o seletor de texto, usa o texto visivel.
@@ -107,10 +111,24 @@ def group_messages(messages: list[dict]) -> list[dict]:
     return groups
 
 
+def fill_screen(context):
+    """Abre a janela ocupando a tela: pequena, o Kenlo esconde partes da pagina."""
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+        session = context.new_cdp_session(page)
+        window = session.send("Browser.getWindowForTarget")["windowId"]
+        session.send("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": "normal"}})
+        session.send("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": "maximized"}})
+        session.detach()
+    except Exception as exc:
+        print(f"AVISO=janela nao maximizada: {exc}", flush=True)
+    return context
+
+
 def browser(playwright):
     PROFILE.mkdir(parents=True, exist_ok=True)
     channel = os.environ.get("JA_WHATSAPP_CANAL", "chrome") or None
-    return playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), accept_downloads=False, no_viewport=True)
+    return fill_screen(playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), accept_downloads=False, no_viewport=True))
 
 
 def open_group(page, name: str) -> None:
@@ -127,16 +145,74 @@ def open_group(page, name: str) -> None:
     page.wait_for_timeout(1500)
 
 
-def load_history(page) -> None:
-    for _ in range(SCROLLS):
-        page.evaluate("() => { const item = document.querySelector('[data-id]'); if (item) item.scrollIntoView(); }")
-        page.wait_for_timeout(600)
+def wait_synced(page) -> None:
+    """Esta janela e um aparelho separado: as mensagens novas chegam ao sincronizar."""
+    limit = time.monotonic() + SYNC_WAIT_S
+    while time.monotonic() < limit:
+        if not re.search(r"sincronizando|syncing", page.evaluate("() => document.body.innerText").lower()):
+            return
+        print("WHATSAPP_SINCRONIZANDO", flush=True)
+        page.wait_for_timeout(3000)
+
+
+def wheel(page, distance: int) -> None:
+    """Rola a conversa como uma pessoa: sem pular, para o WhatsApp carregar o texto."""
+    box = page.evaluate("() => { const box = (document.querySelector('#main') || document.body).getBoundingClientRect(); return [box.left + box.width / 2, box.top + box.height / 2]; }")
+    page.mouse.move(box[0], box[1])
+    page.mouse.wheel(0, distance)
+    page.wait_for_timeout(WHEEL_WAIT_MS)
+
+
+def older_than_start(page, first_code: int) -> bool:
+    from dodaios.core import property_intake as intake
+
+    codes = [intake.code_of(intake.property_key(message["text"])) for message in page.evaluate(READ_MESSAGES_JS) if NEW_PROPERTY.search(message.get("text") or "")]
+    return first_code > 0 and any(code is not None and code < first_code for code in codes)
+
+
+def read_all(page, first_code: int = 0) -> list[dict]:
+    """Sobe ate antes do primeiro codigo e desce lendo tudo, em ordem, ate o fim do grupo."""
+    wait_synced(page)
+    page.wait_for_timeout(2000)
+    last_top, still = "", 0
+    for _ in range(MAX_PAGES):
+        if older_than_start(page, first_code):
+            break
+        top = page.evaluate("() => (document.querySelector('#main [data-id]') || {getAttribute() { return ''; }}).getAttribute('data-id')")
+        still = still + 1 if top == last_top else 0
+        last_top = top
+        if still >= STILL_ROUNDS:
+            break
+        wheel(page, -WHEEL_PIXELS)
+    found: dict[str, dict] = {}
+    still = 0
+    for _ in range(MAX_PAGES * 2):
+        before = len(found)
+        for message in page.evaluate(READ_MESSAGES_JS):
+            known = found.setdefault(message["id"], message)
+            if message.get("text") and not known.get("text"):
+                known.update(message)
+        still = still + 1 if len(found) == before else 0
+        if still >= STILL_ROUNDS:
+            break
+        wheel(page, WHEEL_PIXELS)
+    return list(found.values())
+
+
+def reveal(page, message_id: str) -> None:
+    """Traz a mensagem de volta para a tela, para abrir as fotos dela."""
+    for distance in (-WHEEL_PIXELS, WHEEL_PIXELS):
+        for _ in range(MAX_PAGES):
+            if page.evaluate(FIRST_IMAGE_JS, message_id):
+                return
+            wheel(page, distance)
 
 
 def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
     """Abre a primeira foto e percorre o visualizador para pegar o tamanho real."""
     folder.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
+    reveal(page, message_id)
     image = page.evaluate_handle(FIRST_IMAGE_JS, message_id).as_element()
     if not image:
         return saved
@@ -184,15 +260,22 @@ def open_chat(page, name: str) -> None:
 
 def scan(page) -> dict:
     """Le o grupo ja aberto e coloca na fila o que ainda nao era conhecido."""
-    from dodaios.core import property_intake as intake
+    from dodaios.core import cadastro_plan as plan, property_intake as intake
 
-    new, known, photos = 0, 0, 0
-    load_history(page)
-    items = group_messages(page.evaluate(READ_MESSAGES_JS))
+    new, known, photos, last_code = 0, 0, 0, 0
+    try:
+        first_code = int(plan.load_rules().get("codigo_inicial", 0))
+    except (OSError, ValueError):
+        first_code = 0
+    items = group_messages(read_all(page, first_code))
     if not items:
         diagnose(page)
-    for item in items:
+    print("WHATSAPP_FICHAS=" + json.dumps([{"inicio": re.sub(r"\d{4,}", "#", item["text"])[:30], "fotos": item["photos"]} for item in items[-6:]], ensure_ascii=False), flush=True)
+    for item in reversed(items):
         key = intake.property_key(item["text"])
+        last_code = max(last_code, intake.code_of(key) or 0)
+        if intake.before_start(key, first_code):
+            continue
         stored: list[str] = []
         if item["first_photo"] and not intake.has_photos(key):
             stored = save_photos(page, item["first_photo"], item["photos"], intake.photo_folder(key))
@@ -200,7 +283,7 @@ def scan(page) -> dict:
         new += is_new
         known += not is_new
         photos += len(stored)
-    return {"novos": new, "ja_conhecidos": known, "fotos": photos}
+    return {"novos": new, "ja_conhecidos": known, "fotos": photos, "mensagens": len(items), "maior_codigo": last_code, "codigo_inicial": first_code}
 
 
 def read_group(name: str) -> dict:

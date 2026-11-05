@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 from dodaios.core import company_skills as store
 
 from dodaios.core import company_org as org
+from dodaios.core import agent_questions as questions
 from dodaios.core import company_chat as chat
 from dodaios.core import knowledge
 
@@ -86,7 +88,8 @@ def _ensure_specialist(company_id: str, skill: dict, sector: str = "", urgent: b
     state, company = _organized(company_id)
     member_id = f"especialista-{skill['id']}"[:120]
     if not any(member.id == member_id for member in company.members):
-        home = sector or next(item.id for item in company.departments if org.fold(item.name) == org.HOME_SECTOR)
+        chosen = sector or skill.get("category", "")
+        home = chosen if any(item.id == chosen for item in company.departments) else next(item.id for item in company.departments if org.fold(item.name) == org.HOME_SECTOR)
         company.members.append(Member(id=member_id, name=f"Especialista em {skill['name']}"[:120], role="Especialista da habilidade", departmentId=home))
         _write_state(state)
     manager = org.manager_of(company, next(member.departmentId for member in company.members if member.id == member_id))
@@ -131,6 +134,12 @@ def _study_everyone(state) -> int:
     for company in state.companies:
         skills = store.list_skills(company.id)
         taught = {skill.get("specialistId") for skill in skills}
+        sectors = {item.id for item in company.departments}
+        for skill in skills:  # quem nasceu no setor errado volta para o setor da funcao
+            person = next((item for item in company.members if item.id == skill.get("specialistId")), None)
+            if person and skill.get("category") in sectors and person.kind == "especialista" and person.departmentId != skill["category"]:
+                person.departmentId = skill["category"]
+                _write_state(state)
         for person in company.members:
             if person.kind == "especialista" and person.id not in taught:
                 name = re.sub(r"^Especialista em ", "", person.name)
@@ -410,6 +419,40 @@ def _ordered_photos(item: dict) -> dict:
             "avisos": result["avisos"] + result["duvidas"], "ambientes": list(order.SEQUENCES[kind])}
 
 
+class OwnerAnswer(BaseModel):
+    texto: str = Field(min_length=1, max_length=_MAX_TEXT)
+
+
+@voice_router.get("/pergunta")
+def open_question(janela: int = 0) -> dict:
+    """A pergunta que algum agente esta fazendo ao dono, em qualquer tela do app."""
+    if janela:
+        questions.panel_seen()
+    return {"pergunta": questions.current(), "na_janela": questions.panel_alive()}
+
+
+@voice_router.get("/pergunta/janela")
+def question_panel():
+    from fastapi.responses import HTMLResponse
+
+    return HTMLResponse(questions.PANEL_HTML, headers={"Cache-Control": "no-store"})
+
+
+@voice_router.post("/pergunta/responder")
+def answer_question(body: OwnerAnswer) -> dict:
+    return {"ok": questions.answer(body.texto)}
+
+
+@voice_router.get("/pergunta/imagem")
+def question_image():
+    from fastapi.responses import FileResponse
+
+    path = questions.image_path()
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Sem imagem")
+    return FileResponse(str(path), media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @voice_router.get("/imoveis/fotos/painel")
 def photo_panel() -> dict:
     """O que o Especialista em Fotos esta cuidando."""
@@ -534,7 +577,7 @@ def new_company_task(company_id: str, body: CompanyTaskBody) -> dict:
     _write_state(state)
     if route["agente"]:
         try:
-            property_agent.start(property_agent.can_save())
+            _run_agent(company_id, route["rota"])
             route["iniciado"] = True
         except RuntimeError as exc:
             route["aviso"] = str(exc)
@@ -576,18 +619,75 @@ def _ask_company(company_id: str, company, text: str) -> dict:
     return {"texto": f"Ninguém sabia responder ainda. {created['criado']} está em {sector} e já vai estudar; a resposta chega aqui.", "rota": created["rota"], "pendente": created["habilidade"]}
 
 
+_AGENT_FEEDBACK = re.compile(r"\b(grupo|codigo|imove\w*|foto\w*|kenlo|whatsapp|rol[ae]\w*|tent\w*|de novo|errad\w*|falt\w*|tem o|continu\w*|ajust\w*|corrig\w*|olha|procur\w*)\b")
+_FEEDBACK_MINUTES = 30
+_READ_KENLO = re.compile(r"\b(le|leia|ler|estude|estudar|aprenda|olhe)\b.*\b(cadastro\w*|imove\w*).*\bkenlo\b|\bmodo leitura\b")
+
+
+def _run_agent(company_id: str, route: list[str]) -> None:
+    from dodaios.core import property_agent
+
+    property_agent.start(property_agent.can_save(), on_finish=lambda text: chat.add(company_id, "empresa", text, rota=route, agente=True))
+
+
+def _agent_feedback(company_id: str, text: str) -> dict | None:
+    """A ultima fala do agente, se esta mensagem for uma resposta a ela."""
+    if "?" in text or not _AGENT_FEEDBACK.search(org.fold(text)):
+        return None
+    last = next((item for item in reversed(chat.history(company_id)) if item["quem"] == "empresa"), None)
+    if not last or not last.get("agente"):
+        return None
+    age = datetime.now(UTC) - datetime.fromisoformat(last["quando"])
+    return last if age < timedelta(minutes=_FEEDBACK_MINUTES) else None
+
+
+def _continue_agent(company_id: str, text: str, last: dict) -> None:
+    """Guarda a correcao com o especialista e retoma o trabalho."""
+    skill = next((item for item in store.list_skills(company_id) if "imove" in org.fold(item["name"])), None)
+    if skill:
+        store.add_correction(company_id, skill["id"], text)
+    route = last.get("rota") or ["Gerente Geral"]
+    try:
+        _run_agent(company_id, route)
+        chat.add(company_id, "empresa", "Entendi. Guardei a correção e vou tentar de novo. Conto aqui quando terminar.", rota=route)
+    except RuntimeError as exc:
+        chat.add(company_id, "empresa", f"{exc}. Guardei a correção.", rota=route)
+
+
 @voice_router.get("/empresa/{company_id}/conversa")
 def company_conversation(company_id: str) -> dict:
+    from dodaios.core import property_agent
+
     messages = chat.history(company_id)
     open_studies = {item["pendente"] for item in messages if item.get("pendente")}
-    return {"mensagens": messages, "estudando": any(knowledge.status(company_id, skill)["estado"] in ("aguardando", "pesquisando") for skill in open_studies)}
+    return {"mensagens": messages, "estudando": property_agent.busy() or any(knowledge.status(company_id, skill)["estado"] in ("aguardando", "pesquisando") for skill in open_studies)}
 
 
 @voice_router.post("/empresa/{company_id}/conversa")
 def talk_to_company(company_id: str, body: ChatMessage) -> dict:
     """O dono fala com a empresa: pergunta vira resposta e ordem vira tarefa."""
+    waiting = questions.current()
+    if waiting:
+        chat.add(company_id, "empresa", waiting["texto"], rota=["Agente"])
+        chat.add(company_id, "voce", body.texto)
+        questions.answer(body.texto)
+        return {"ok": True}
     _state, company = _organized(company_id)
+    feedback = _agent_feedback(company_id, body.texto)
     chat.add(company_id, "voce", body.texto)
+    if _READ_KENLO.search(org.fold(body.texto)):
+        from dodaios.core import property_agent
+
+        route = ["Gerente Geral", "Especialista de cadastro"]
+        try:
+            property_agent.read_kenlo(lambda text: chat.add(company_id, "empresa", text, rota=route))
+            chat.add(company_id, "empresa", "Vou ler até 100 imóveis ativos de cada tipo, em venda e em locação, só olhando, sem alterar nada. Conto aqui quando terminar.", rota=route)
+        except RuntimeError as exc:
+            chat.add(company_id, "empresa", f"{exc}. Tente de novo em seguida.", rota=route)
+        return {"ok": True}
+    if feedback:
+        _continue_agent(company_id, body.texto, feedback)
+        return {"ok": True}
     topic = org.wants_specialist(body.texto)
     if org.is_question(body.texto) and not topic:
         reply = _ask_company(company_id, company, body.texto)
@@ -599,7 +699,7 @@ def talk_to_company(company_id: str, body: ChatMessage) -> dict:
     elif route.get("resposta"):
         chat.add(company_id, "empresa", route["resposta"], rota=route["rota"], fontes=route.get("fontes", []))
     elif route.get("agente"):
-        chat.add(company_id, "empresa", route.get("aviso") or "O agente começou. Acompanhe na ficha do especialista.", rota=route["rota"])
+        chat.add(company_id, "empresa", route.get("aviso") or "O agente começou. Conto aqui quando terminar.", rota=route["rota"])
     else:
         chat.add(company_id, "empresa", "Tarefa encaminhada. Acompanhe em Tarefas.", rota=route["rota"])
         return {"missao": route["prompt"]}

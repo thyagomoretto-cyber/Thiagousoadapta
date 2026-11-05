@@ -29,6 +29,10 @@ PROFILE = ROOT / "whatsapp-perfil"
 REPORTS = Path(os.environ.get("JA_KENLO_RELATORIOS") or Path.home() / "Downloads")
 URL = os.environ.get("JA_KENLO_URL") or ""
 LOGIN_HOST = "signin.valuegaia"
+SELECT_WAIT_S = 30
+SAVE_WAIT_MS = 60_000
+VISION_TRIES = 6
+LOAD_TIMEOUT_MS = int(os.environ.get("JA_KENLO_CARGA_MS") or 30_000)
 KEYCHAIN_ITEM = "ja-kenlo"
 YES = re.compile(r"^\s*sim\s*$", re.IGNORECASE)
 OWNER_WAIT_MS = 3_000
@@ -97,6 +101,19 @@ SET_SELECT_JS = r"""
   return { ok: true, escolhido: option.text };
 }
 """
+SELECT_STATE_JS = r"""
+([node, wanted]) => {
+  const fold = window.__ja.fold;
+  const texts = [...node.options].map((item) => fold(item.text));
+  const chosen = node.selectedOptions[0] ? fold(node.selectedOptions[0].text) : '';
+  const target = fold(wanted);
+  return { travado: node.disabled, pronto: texts.some((text) => text === target || text.startsWith(target)), certo: chosen === target || chosen.startsWith(target) };
+}
+"""
+SAVE_JS = r"""
+() => [...document.querySelectorAll('input[type=button], input[type=submit], button')]
+  .filter((node) => node.getClientRects().length && /^\s*salvar\s*$/i.test(node.innerText || node.value || '')).pop() || null
+"""
 MAP_JS = r"""
 () => [...document.querySelectorAll('input,select,textarea,button')].filter((node) => node.type !== 'hidden').map((node) => {
   const near = node.labels?.[0]?.innerText || node.closest('div,td')?.innerText?.slice(0, 40) || '';
@@ -105,6 +122,35 @@ MAP_JS = r"""
 """
 
 
+ANSWER_WAIT_S = float(os.environ.get("JA_ESPERA_RESPOSTA") or 600)
+CONFIRM_WAIT_S = min(ANSWER_WAIT_S, 90)
+MAX_QUESTIONS = 3
+FIELD_TIMEOUT_MS = 4000
+NAVIGATION_TIMEOUT_MS = 45_000
+EMPTY_TRIES = 3
+EMPTY_WAIT_S = min(ANSWER_WAIT_S, 180)
+POPUP_JS = r"""
+() => {
+  const open = [...document.querySelectorAll('[role=dialog], .modal, .swal2-popup, .ui-dialog')].find((node) => {
+    const box = node.getBoundingClientRect();
+    return box.width > 80 && box.height > 40 && getComputedStyle(node).visibility !== 'hidden' && getComputedStyle(node).display !== 'none';
+  });
+  return open ? open.innerText.replace(/\s+/g, ' ').slice(0, 160) : '';
+}
+"""
+RECORD_JS = r"""
+() => {
+  if (window.__jaClicks) return;
+  window.__jaClicks = [];
+  document.addEventListener('click', (event) => {
+    const node = event.target.closest('button, a, [role=button], label, li, input, select') || event.target;
+    if (node.type === 'password') return;
+    const typed = node.matches('input, select, textarea') && !/button|submit|checkbox|radio/.test(node.type);
+    const text = (node.innerText || node.value || node.getAttribute('aria-label') || node.title || '').trim().slice(0, 60);
+    window.__jaClicks.push({ texto: typed ? '' : text });
+  }, true);
+}
+"""
 CONDO_JS = r"""
 ([name, street, area, city]) => {
   const fold = window.__ja.fold;
@@ -122,6 +168,11 @@ CONDO_JS = r"""
 """
 
 
+def plain_problem(exc: Exception) -> str:
+    text = str(exc).splitlines()[0][:120]
+    return "o campo não respondeu" if "Timeout" in text else text
+
+
 def digits(text: str) -> str:
     return re.sub(r"\D", "", text or "").lstrip("0")
 
@@ -129,12 +180,16 @@ def digits(text: str) -> str:
 class Form:
     """Preenche o formulario pelos rotulos que aparecem na tela."""
 
-    def __init__(self, page) -> None:
+    def __init__(self, page, company: str = "") -> None:
         self.page = page
+        page.set_default_timeout(FIELD_TIMEOUT_MS)
+        page.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
         self.log: list[str] = []
         self.failed: list[str] = []
         self.known_owner = False
         self.condo_found = False
+        self.stopped = False
+        self.company = company
 
     def _control(self, section: str, field: str, types: list[str], wait_ms: int = FIELD_WAIT_MS):
         limit = time.monotonic() + wait_ms / 1000
@@ -191,13 +246,24 @@ class Form:
         box.fill(value)
 
     def choose(self, section: str, field: str, value: str) -> None:
-        node = self._control(section, field, ["select:select-one"])
-        if not node:
-            raise LookupError("lista nao encontrada")
-        result = self.page.evaluate(SET_SELECT_JS, [node, value])
-        if not result["ok"]:
-            raise ValueError(f"sem a opcao; existem: {result['opcoes']}")
-        self.page.wait_for_timeout(500)
+        """Finalidade e Tipo ficam travados ate carregar: espera e confere o que ficou."""
+        limit = time.monotonic() + SELECT_WAIT_S
+        while True:
+            node = self._control(section, field, ["select:select-one"])
+            if not node:
+                raise LookupError("lista nao encontrada")
+            state = self.page.evaluate(SELECT_STATE_JS, [node, value])
+            if not state["travado"] and state["pronto"]:
+                result = self.page.evaluate(SET_SELECT_JS, [node, value])
+                if not result["ok"]:
+                    raise ValueError(f"sem a opcao; existem: {result['opcoes']}")
+                self.page.wait_for_timeout(700)
+                node = self._control(section, field, ["select:select-one"])
+                if node and self.page.evaluate(SELECT_STATE_JS, [node, value])["certo"]:
+                    return
+            if time.monotonic() > limit:
+                raise ValueError(f"lista travada ou sem a opcao {value}")
+            self.page.wait_for_timeout(500)
 
     def tick(self, section: str, field: str) -> None:
         self.page.evaluate(SEARCH_JS)
@@ -238,15 +304,10 @@ class Form:
 
     def street(self, section: str, field: str, value: dict) -> None:
         """Logradouro: abre a busca, digita e escolhe o resultado do bairro certo."""
-        self.page.evaluate(SEARCH_JS)
-        label = self.page.evaluate_handle("([s, f]) => window.__ja.label(s, f)", [section, field])
-        if self.page.evaluate("(node) => !node", label):
-            raise LookupError("logradouro nao encontrado")
-        opener = self.page.evaluate_handle(
-            """(label) => [...document.querySelectorAll('.select2-selection, .select2-choice, .chosen-single, input[type=text], [role=combobox]')].find((node) => (label.compareDocumentPosition(node) & 4) && window.__ja.visible(node))""",
-            label).as_element()
-        if not opener:
-            raise LookupError("busca do logradouro nao encontrada")
+        # "Buscar por" tambem mostra a palavra Logradouro; o aviso do campo e unico.
+        self.page.keyboard.press("Escape")
+        opener = self.page.get_by_text(re.compile("digite um logradouro", re.IGNORECASE)).first
+        opener.wait_for(state="visible", timeout=FIELD_TIMEOUT_MS)
         opener.click()
         self.page.wait_for_timeout(400)
         self.page.keyboard.type(value["rua"], delay=20)
@@ -258,7 +319,7 @@ class Form:
                 """([street, area]) => {
                   const fold = window.__ja.fold;
                   const items = [...document.querySelectorAll('li, [role=option]')].filter((node) => window.__ja.visible(node) && fold(node.innerText).includes(fold(street)));
-                  const best = items.find((node) => fold(node.innerText).includes(fold(area))) || null;
+                  const best = items.find((node) => fold(node.innerText).includes(fold(area))) || (items.length === 1 ? items[0] : null);
                   if (best) { best.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); best.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); best.click(); return best.innerText; }
                   return '';
                 }""", [value["rua"], value["bairro"]])
@@ -320,33 +381,159 @@ class Form:
     def _tiles(self) -> int:
         return self.page.get_by_text("Foto de capa", exact=True).count()
 
-    def run(self, steps: list[dict], photos: list[str]) -> None:
+    def _do(self, step: dict, photos: list[str]) -> None:
         actions = {"texto": self.text, "telefone": self.phone, "dinheiro": self.text, "nome": self.name, "texto_longo": self.long_text, "lista": self.choose,
                    "logradouro": self.street, "opcao": self.option, "condominio": self.condo}
+        section, field, how = step["secao"], step["campo"], step["como"]
+        if how == "fotos":
+            self.photos(photos)
+        elif how == "perguntar_piso":
+            self.ask_floor(section, step["valor"])
+        elif how == "marcar":
+            self.tick(section, field)
+        elif how == "clicar":
+            self.click(section, field)
+        else:
+            actions[how](section, field, step["valor"])
+
+    def ask_floor(self, section: str, floors: list[str]) -> None:
+        """Sem ver o piso nas fotos, pergunta qual e em vez de chutar."""
+        from dodaios.core import agent_questions as questions
+
+        decision = self._ask("não consegui identificar o piso pelas fotos. Qual é o piso? Escreva, por exemplo: porcelanato.", [questions.SHOW, "Pular este campo"])
+        if decision["acao"] == "mostrar":
+            demonstrate(self.page, "pode marcar o piso na janela do agente. Quando terminar, clique em Pronto.")
+            return
+        plain = decision["texto"].lower()
+        chosen = [name for name in floors if name.lower() in plain]
+        for name in chosen:
+            self.tick(section, name)
+        if not chosen and decision["acao"] != "pular":
+            raise LookupError("piso nao informado")
+
+    def _ask(self, text: str, options: list[str], seconds: float = ANSWER_WAIT_S) -> dict:
+        """Fala com o dono, mostra a tela e espera; volta acao vazia sem resposta."""
+        from dodaios.core import agent_questions as questions
+
+        try:
+            self.page.screenshot(path=str(questions.image_path()))
+            shown = True
+        except Exception:
+            shown = False
+        reply = questions.ask_owner(text, options, seconds, shown)
+        self.log.append(f"PERGUNTA {text[:120]} -> {reply[:80] or 'sem resposta'}")
+        return {**questions.interpret(reply), "respondeu": bool(reply), "texto": reply}
+
+    def _apply(self, step: dict, decision: dict, photos: list[str]) -> None:
+        if decision["acao"] == "passos":
+            for click in json.loads(decision["valor"]):
+                self.page.get_by_text(click["texto"], exact=False).first.click(timeout=5000)
+                self.page.wait_for_timeout(800)
+        elif decision["acao"] == "clicar":
+            self.page.get_by_text(decision["valor"], exact=False).first.click(timeout=5000)
+            self.page.wait_for_timeout(1000)
+        elif decision["acao"] == "valor":
+            step = {**step, "valor": decision["valor"]}
+        if decision["acao"] != "pular":
+            self._do(step, photos)
+
+    def _resolve(self, step: dict, problem: str, photos: list[str]) -> bool:
+        """Pergunta ao dono como seguir; o que ele confirmar vale para as proximas."""
+        from dodaios.core import agent_questions as questions
+
+        field = step["campo"]
+        key = f"{self.company}|{step['secao']}|{field}|{problem[:40]}"
+        known = questions.learned(key)
+        if known:
+            try:
+                self._apply(step, known, photos)
+                self.log.append(f"APRENDIDO {field}: {known['acao']}")
+                return True
+            except Exception:
+                pass
+        popup = self.page.evaluate(POPUP_JS)
+        text = f"estou com um problema no campo {field.strip('*:')}. {problem}.{f' Apareceu na tela: {popup}.' if popup else ''} O que eu devo fazer?"
+        for _ in range(MAX_QUESTIONS):
+            decision = self._ask(text, [questions.SHOW, "Pular este campo", "Parar"])
+            if not decision["acao"] and decision["texto"] and decision["texto"] != questions.RUN:
+                value = step["valor"]
+                decision = {**decision, **questions.understand(decision["texto"], f"campo {field}, valor da ficha: {value}, problema: {problem}")}
+            action = decision["acao"]
+            if action == "mostrar":
+                clicks = demonstrate(self.page, "pode mostrar na janela do agente. Quando terminar, clique em Pronto.")
+                self.page.wait_for_timeout(800)
+                try:
+                    self._do(step, photos)
+                except Exception:
+                    self.log.append(f"MOSTROU {field}: o dono fez direto na janela")
+                if clicks and self._ask("anotei o que você fez. Salvo para fazer sempre assim?", ["Sim", "Não"], CONFIRM_WAIT_S)["acao"] == "sim":
+                    questions.learn(key, {"acao": "passos", "valor": json.dumps(clicks, ensure_ascii=False)})
+                    self.log.append(f"APRENDEU {field}: {len(clicks)} cliques")
+                return True
+            if not decision["respondeu"] or action == "parar":
+                self.stopped = True
+                return False
+            if action == "clicar" and questions.forbidden_click(decision["valor"]):
+                text = f"não posso clicar em {decision['valor']} por resposta. Diga outra coisa ou parar."
+                continue
+            if action not in ("tentar", "pular", "clicar", "valor"):
+                text = "não entendi. Diga tentar de novo, pular, parar, clique em tal botão, ou coloque tal valor."
+                continue
+            try:
+                self._apply(step, decision, photos)
+            except Exception as exc:
+                text = f"ainda não funcionou: {plain_problem(exc)}. O que eu devo fazer?"
+                continue
+            if action in questions.LEARNABLE:
+                what = {"pular": "pular este campo", "clicar": f"clicar em {decision['valor']}", "valor": f"usar {decision['valor']}"}[action]
+                keep = self._ask(f"funcionou. Salvo para fazer sempre assim: {what}?", ["Sim", "Não"], CONFIRM_WAIT_S)
+                if keep["acao"] == "sim":
+                    questions.learn(key, {"acao": action, "valor": decision["valor"]})
+                    self.log.append(f"APRENDEU {field}: {what}")
+            return True
+        return False
+
+    def run(self, steps: list[dict], photos: list[str]) -> None:
         for step in steps:
-            section, field, how = step["secao"], step["campo"], step["como"]
+            section, field = step["secao"], step["campo"]
             if step.get("sem_condominio") and self.condo_found:
                 self.log.append(f"PULADO {section} > {field}: veio do condominio")
                 continue
+            if self.stopped:
+                self.failed.append(field)
+                continue
             try:
-                if how == "fotos":
-                    self.photos(photos)
-                elif how == "marcar":
-                    self.tick(section, field)
-                elif how == "clicar":
-                    self.click(section, field)
-                else:
-                    actions[how](section, field, step["valor"])
+                self._do(step, photos)
                 self.log.append(f"OK    {section} > {field}")
             except Exception as exc:
-                self.failed.append(field)
-                self.log.append(f"FALHOU {section} > {field}: {str(exc).splitlines()[0][:220]}")
+                problem = plain_problem(exc)
+                if step.get("opcional"):
+                    self.log.append(f"PULADO {section} > {field}: nao existe neste tipo")
+                elif self._resolve(step, problem, photos):
+                    self.log.append(f"OK    {section} > {field} (com ajuda)")
+                else:
+                    self.failed.append(field)
+                    self.log.append(f"FALHOU {section} > {field}: {problem}")
+
+
+def fill_screen(context):
+    """Abre a janela ocupando a tela: pequena, o Kenlo esconde partes da pagina."""
+    try:
+        page = context.pages[0] if context.pages else context.new_page()
+        session = context.new_cdp_session(page)
+        window = session.send("Browser.getWindowForTarget")["windowId"]
+        session.send("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": "normal"}})
+        session.send("Browser.setWindowBounds", {"windowId": window, "bounds": {"windowState": "maximized"}})
+        session.detach()
+    except Exception as exc:
+        print(f"AVISO=janela nao maximizada: {exc}", flush=True)
+    return context
 
 
 def browser(playwright):
     PROFILE.mkdir(parents=True, exist_ok=True)
     channel = os.environ.get("JA_WHATSAPP_CANAL", "chrome") or None
-    return playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), no_viewport=True)
+    return fill_screen(playwright.chromium.launch_persistent_context(str(PROFILE), channel=channel, headless=bool(os.environ.get("JA_WHATSAPP_OCULTO")), no_viewport=True))
 
 
 def saved_login() -> tuple[str, str]:
@@ -380,14 +567,27 @@ def sign_in(page) -> bool:
     return True
 
 
+def open_url(page, url: str | None = None) -> None:
+    """O Kenlo pode nunca terminar de carregar tudo: quem confere a tela e quem chamou."""
+    try:
+        if url:
+            page.goto(url, wait_until="domcontentloaded", timeout=LOAD_TIMEOUT_MS)
+        else:
+            page.reload(wait_until="domcontentloaded", timeout=LOAD_TIMEOUT_MS)
+    except Exception as exc:
+        if "timeout" not in str(exc).lower():
+            raise
+        print(f"AVISO=pagina ainda carregando: {page.url.split('?')[0]}", flush=True)
+
+
 def wait_login(page, target: str) -> None:
-    page.goto(target)
+    open_url(page, target)
     page.wait_for_timeout(2500)
     if LOGIN_HOST not in page.url:
         return
     if sign_in(page):
         page.wait_for_timeout(2000)
-        page.goto(target)
+        open_url(page, target)
         return
     print("Entre no Kenlo nessa janela. Aguardando ate 5 minutos...", flush=True)
     limit = time.monotonic() + LOGIN_WAIT_S
@@ -396,7 +596,22 @@ def wait_login(page, target: str) -> None:
             raise SystemExit("KENLO_SEM_LOGIN: entre no Kenlo e tente de novo.")
         page.wait_for_timeout(1000)
     page.wait_for_timeout(2000)
-    page.goto(target)
+    open_url(page, target)
+
+
+def ask_counts(item: dict, sheet: dict, notes: list[str]) -> dict:
+    """Nem ficha nem fotos: pergunta ao dono antes de preencher."""
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan
+
+    filled = {**sheet}
+    for field, name in plan.missing_counts(item, sheet):
+        reply = questions.ask_owner(f"não achei na ficha nem nas fotos: quantos {name} tem o {item['chave']}? Escreva o número.", [])
+        number = re.search(r"\d+", reply or "")
+        if number:
+            filled[field] = number.group(0)
+        else:
+            notes.append(f"{name.capitalize()}: sem resposta. Confira.")
+    return filled
 
 
 def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
@@ -419,10 +634,16 @@ def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
         notes += [f"Repetida fora do anuncio: {Path(photo['caminho']).name}" for photo in arranged["repetidas"]]
         notes += [f"{Path(photo['caminho']).name}: {photo['ambiente']} ({photo['fonte']})" for photo in arranged["ordem"]]
         intake.update(item["chave"], analise_fotos={"fotos": len(final), "duvidas": doubts, "avisos": arranged["avisos"], "repetidas": len(arranged["repetidas"]), "faltando": arranged["faltando"], "problemas": vision.problems[-3:]})
+    details = vision.detect_details([Path(path) for path in final])
+    sheet = plan.fill_counts({**sheet, "pisos_fotos": details["piso"], "itens_fotos": details["itens"], "itens_ficha": plan.written_items(item, sheet)}, details, notes)
+    sheet = ask_counts(item, sheet, notes)
     text = plan.clean_ad(vision.write_ad(plan.ad_prompt(item, sheet, rules)), sheet) or plan.template_ad(item, sheet, rules["nome_empresa"], rules)
     built = plan.build_plan(item, sheet, rules, text)
     built["conferir"] += notes + vision.problems
     built["ficha"] = sheet
+    built["divergencias"] = plan.compare_with_photos(sheet, details)
+    if not details.get("contagens") and not details["itens"]:
+        built["conferir"].append("Fotos nao conferidas com a ficha: modelo de imagens sem resposta.")
     built["duvidas_fotos"] = doubts
     if not final:
         built["faltando"].append("fotos")
@@ -440,6 +661,31 @@ def report(key: str, form: Form | None, built: dict, field_map: list[str], resul
     return path
 
 
+def vision_ready(key: str) -> tuple[bool, bool]:
+    """Sem o modelo nao ha fotos em ordem, itens nem descricao: o dono decide antes."""
+    from dodaios.core import agent_questions as questions, photo_vision as vision
+
+    for _ in range(VISION_TRIES):
+        if vision.model_ready():
+            return True, True
+        reply = questions.ask_owner(f"o modelo de imagens não está respondendo, então não consigo ordenar as fotos, ver os itens nem refazer a descrição do {key}. Ligue o computador da Maria e clique em Tentar de novo.",
+                                    ["Tentar de novo", "Seguir sem fotos", "Parar"])
+        action = questions.interpret(reply)["acao"]
+        if not reply or action in ("parar", "nao"):
+            return False, False
+        if action == "pular":
+            return True, False
+    return False, False
+
+
+def owner_accepts(key: str, differences: list[str]) -> bool:
+    """Ficha e fotos discordam: o dono decide antes de preencher."""
+    from dodaios.core import agent_questions as questions
+
+    reply = questions.ask_owner(f"conferi o {key} e achei diferença: {'; '.join(differences)}. Sigo com o que está na ficha?", ["Seguir com a ficha", "Parar"])
+    return bool(reply) and questions.interpret(reply)["acao"] not in ("parar", "nao")
+
+
 def fill(page, key: str, save: bool) -> bool:
     """Cadastra um imovel na aba do Kenlo; devolve se tudo correu bem."""
     from dodaios.core import cadastro_plan as plan, property_intake as intake
@@ -449,10 +695,20 @@ def fill(page, key: str, save: bool) -> bool:
     if not item:
         print(f"KENLO_RESULTADO=SEM_IMOVEL {key}", flush=True)
         return False
+    go_on, vision_on = vision_ready(key)
+    if not go_on:
+        intake.mark(key, intake.REVIEW, "Modelo de imagens desligado")
+        print(f"KENLO_RESULTADO=SEM_MODELO {key}", flush=True)
+        return False
+    save = save and vision_on  # sem conferir as fotos, nunca publica
     built, photos = prepare(item, rules)
     if built["faltando"]:
         intake.mark(key, intake.REVIEW, "Falta na ficha: " + ", ".join(built["faltando"]))
         print(f"KENLO_RESULTADO=FALTANDO {key} {report(key, None, built, [], 'parado antes de preencher')}", flush=True)
+        return False
+    if built["divergencias"] and not owner_accepts(key, built["divergencias"]):
+        intake.mark(key, intake.REVIEW, "Ficha diferente das fotos: " + "; ".join(built["divergencias"]))
+        print(f"KENLO_RESULTADO=DIVERGENCIA {key} {report(key, None, built, [], 'parado: ficha diferente das fotos')}", flush=True)
         return False
     if save and built["duvidas_fotos"]:
         # O Especialista em Fotos so libera o imovel com a ordem certa.
@@ -469,7 +725,7 @@ def fill(page, key: str, save: bool) -> bool:
     page.bring_to_front()
     page.goto("about:blank")
     wait_login(page, URL or plan.NEW_PROPERTY_URL)
-    form = Form(page)
+    form = Form(page, rules.get("empresa", ""))
     page.wait_for_timeout(2500)
     form.run(built["passos"], photos)
     page.evaluate(SEARCH_JS)
@@ -484,12 +740,22 @@ def fill(page, key: str, save: bool) -> bool:
         intake.mark(key, intake.PENDING, "")
         wait_closed(page)
         return True
-    page.get_by_role("button", name=re.compile("^salvar$", re.IGNORECASE)).first.click()
-    page.wait_for_selector("text=/refer[eê]ncia/i", timeout=60_000)
-    found = re.search(r"refer[eê]ncia\s+([A-Z]{1,3}\d+)", page.content(), re.IGNORECASE)
-    reference = found.group(1) if found else ""
-    page.get_by_role("button", name=YES).first.click()
-    page.wait_for_timeout(1500)
+    button = page.evaluate_handle(SAVE_JS).as_element()
+    if not button:
+        raise LookupError("botao SALVAR nao apareceu: nada foi salvo")
+    button.click()
+    # Depois do clique nao repete: tentar de novo criaria um cadastro em dobro.
+    try:
+        page.wait_for_selector("text=/refer[eê]ncia/i", timeout=SAVE_WAIT_MS)
+        found = re.search(r"refer[eê]ncia\s+([A-Z]{1,3}\d+)", page.content(), re.IGNORECASE)
+        reference = found.group(1) if found else ""
+        page.get_by_role("button", name=YES).locator("visible=true").first.click(timeout=10_000)
+        page.wait_for_timeout(1500)
+    except Exception as exc:
+        intake.mark(key, intake.REVIEW, "Conferir no Kenlo: cliquei em Salvar e nao vi a confirmacao")
+        print(f"KENLO_RESULTADO=CONFERIR {key} {report(key, form, built, field_map, f'cliquei em salvar sem confirmacao: {plain_problem(exc)}')}", flush=True)
+        wait_closed(page)
+        return False
     intake.mark(key, intake.DONE, f"Cadastrado no Kenlo: {reference}")
     print(f"KENLO_RESULTADO=SALVO {key} {reference} {report(key, form, built, field_map, f'salvo com a referencia {reference}')}", flush=True)
     return True
@@ -523,32 +789,64 @@ def reader():
     return module
 
 
+def demonstrate(page, text: str) -> list[dict]:
+    """Traz a janela para a frente, espera o dono e devolve os cliques que valem repetir."""
+    from dodaios.core import agent_questions as questions
+
+    page.evaluate(RECORD_JS)
+    page.bring_to_front()
+    reply = questions.ask_owner(text, ["Pronto", "Cancelar"], ANSWER_WAIT_S)
+    clicks = page.evaluate("() => window.__jaClicks || []") if reply else []
+    return [item for item in clicks if item["texto"] and not questions.forbidden_click(item["texto"])]
+
+
+def look_again(page, read: dict) -> bool:
+    """Sem imovel novo, confere com o dono antes de fechar a janela."""
+    from dodaios.core import agent_questions as questions
+
+    code = read.get("maior_codigo", 0)
+    seen = f" O último código que li foi o {code}." if code else " Não consegui ler nenhum código no grupo."
+    reply = questions.ask_owner(f"não encontrei imóvel novo para cadastrar.{seen} Está certo, ou devo fazer algo?", ["Está certo", questions.SHOW, "Procurar de novo"], EMPTY_WAIT_S)
+    if questions.interpret(reply)["acao"] == "mostrar":
+        demonstrate(page, "pode mostrar no WhatsApp: deixe a ficha do imóvel na tela e clique em Pronto.")
+        return True
+    return bool(reply) and not re.search(r"\b(certo|ok|sim|deixa|para|parar|nada)\b", reply.lower())
+
+
 def run_all(group: str, save: bool, fallback: str) -> int:
     """Uma janela, duas abas: cadastra em sequencia ate o grupo nao ter novos."""
     from playwright.sync_api import sync_playwright
 
+    from dodaios.core import agent_questions as questions, property_intake as intake
+
+    intake.retry_stopped()
     whatsapp = reader()
     with sync_playwright() as playwright:
         context = browser(playwright)
         chat = context.pages[0] if context.pages else context.new_page()
         kenlo = context.new_page()
-        whatsapp.open_chat(chat, group)
+        questions.with_owner("abrir o grupo do WhatsApp", lambda: whatsapp.open_chat(chat, group))
         handled: set[str] = set()
         count = 0
-        for _ in range(MAX_ROUNDS):
-            chat.bring_to_front()
-            print("WHATSAPP_LIDO=" + json.dumps(whatsapp.scan(chat), ensure_ascii=False), flush=True)
-            key = next_key()
-            if not key or key in handled:
-                break
-            while key and key not in handled:
-                handled.add(key)
-                count += fill(kenlo, key, save)
-                if not save or kenlo.is_closed():
-                    print(f"CADASTROS_FEITOS={count}", flush=True)
-                    close(context)
-                    return 0
+        for _try in range(EMPTY_TRIES):
+            for _ in range(MAX_ROUNDS):
+                chat.bring_to_front()
+                last_read = questions.with_owner("ler o grupo do WhatsApp", lambda: whatsapp.scan(chat), lambda: demonstrate(chat, "deixe a ficha do imóvel na tela e clique em Pronto."))
+                print("WHATSAPP_LIDO=" + json.dumps(last_read, ensure_ascii=False), flush=True)
                 key = next_key()
+                if not key or key in handled:
+                    break
+                while key and key not in handled:
+                    handled.add(key)
+                    current = key
+                    count += questions.with_owner(f"cadastrar o {current}", lambda: fill(kenlo, current, save), lambda: demonstrate(kenlo, "pode mostrar na janela do agente e clicar em Pronto."))
+                    if not save or kenlo.is_closed():
+                        print(f"CADASTROS_FEITOS={count}", flush=True)
+                        close(context)
+                        return 0
+                    key = next_key()
+            if handled or not look_again(chat, last_read):
+                break
         print(f"CADASTROS_FEITOS={count}", flush=True)
         if not handled:
             print("KENLO_RESULTADO=FILA_VAZIA", flush=True)
@@ -572,9 +870,10 @@ def wait_closed(page) -> None:
 def next_key() -> str:
     from dodaios.core import cadastro_plan as plan, property_intake as intake
 
-    done = plan.load_rules().get("ja_cadastrados", {})
+    rules = plan.load_rules()
+    done = rules.get("ja_cadastrados", {})
     for _ in range(1000):
-        item = intake.next_pending()
+        item = intake.next_pending(int(rules.get("codigo_inicial", 0)))
         if not item:
             return ""
         if item["chave"] not in done:

@@ -15,9 +15,11 @@ from typing import Any, Final
 
 from dodaios.core import photo_order as order
 
-VISION_TIMEOUT_S: Final[float] = 120.0
+VISION_TIMEOUT_S: Final[float] = 240.0
 AD_TIMEOUT_S: Final[float] = 120.0
 CONNECT_TIMEOUT_S: Final[float] = 5.0
+DETAIL_PHOTOS: Final[int] = 10
+DETAIL_CONFIDENCE: Final[float] = 0.7
 OUTDOOR_SKY: Final[float] = 0.2
 # O modelo gasta tokens pensando antes de responder.
 THINKING_TOKENS: Final[int] = 4000
@@ -52,6 +54,20 @@ def _endpoint() -> tuple[str, str]:
         return (base if base.endswith("/v1") else f"{base}/v1"), str(local.get("model") or "")
     except (OSError, KeyError, ValueError):
         return "", ""
+
+
+def model_ready() -> bool:
+    """O modelo de imagens esta ligado e responde?"""
+    import httpx
+
+    base, _ = _endpoint()
+    if not base:
+        return False
+    try:
+        with httpx.Client(timeout=httpx.Timeout(10.0, connect=CONNECT_TIMEOUT_S), trust_env=False) as client:
+            return client.get(f"{base}/models").status_code == 200
+    except httpx.HTTPError:
+        return False
 
 
 def _chat(content: Any, timeout: float, tokens: int) -> str:
@@ -129,6 +145,26 @@ def from_labels(labels: list[tuple[str, float]], kind: str, sky: float) -> dict[
         return {"ambiente": rooms[0], "confianca": 0.5, "ampla": True, "fonte": "palpite"}
     inside = next((room for room in ("panoramica_interna", "salao_geral", "vista_geral", "sala_estar") if room in rooms), "demais")
     return {"ambiente": inside, "confianca": 0.3, "ampla": False, "fonte": "palpite"}
+
+
+def detect_details(paths: list[Path]) -> dict[str, list[str]]:
+    """Piso e itens que aparecem claramente nas fotos; vazio se o modelo nao responder."""
+    if not paths:
+        return {"piso": [], "itens": []}
+    prompt = ("Estas sao fotos de um imovel para anuncio. Olhe com atencao o chao e os ambientes. Responda so um JSON: "
+              '{"piso": [{"nome": "...", "confianca": 0.0}], "itens": [{"nome": "...", "confianca": 0.0}], "contagens": {"dormitorios": 0, "suites": 0, "vagas": 0, "banheiros": 0}}. '
+              f"Nomes de piso permitidos: {', '.join(order.FLOORS)}. Nomes de itens permitidos: {', '.join(order.VISIBLE_ITEMS)}. "
+              "Em contagens, conte so ambientes diferentes que aparecem nas fotos, sem repetir o mesmo ambiente; sem certeza, use 0. "
+              "Liste so o que aparece claramente nas fotos. Se nao tiver certeza, baixe a confianca. Nao invente.")
+    images = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_small_jpeg(path)}"}} for path in paths[:DETAIL_PHOTOS]]
+    try:
+        found = json.loads(re.search(r"\{.*\}", _chat([{"type": "text", "text": prompt}, *images], VISION_TIMEOUT_S, THINKING_TOKENS), re.DOTALL).group(0))
+    except Exception as exc:
+        problems.append(f"Detalhes das fotos: modelo sem resposta ({type(exc).__name__})")
+        return {"piso": [], "itens": []}
+    sure = lambda items, allowed: [str(item["nome"]) for item in items if isinstance(item, dict) and item.get("nome") in allowed and float(item.get("confianca", 0)) >= DETAIL_CONFIDENCE]
+    counts = found.get("contagens") if isinstance(found.get("contagens"), dict) else {}
+    return {"piso": sure(found.get("piso", []), order.FLOORS), "itens": sure(found.get("itens", []), order.VISIBLE_ITEMS), "contagens": counts}
 
 
 def write_ad(prompt: str) -> str:

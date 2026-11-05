@@ -1,0 +1,65 @@
+{
+  "fixos": {
+    "valor_minimo": "0,01",
+    "*Mídia de origem:": "Não Informado / Outros",
+    "Complemento:": "1",
+    "Tipo de Locação:": "Mensal",
+    "*Taxa de Administração (%):": "10",
+    "Condição de pagamento IPTU / ITR:": "Mensal",
+    "Padrão:": "Alto",
+    "Padrão da localização:": "Privilegiada",
+    "Situação do imóvel:": "Desocupado",
+    "Usou FGTS nos últimos 3 anos?": "Não",
+    "Aceita financiamento:": "Sim",
+    "Zoneamento:": "A",
+    "Isolamento:": "Isolada",
+    "Modo Isolamento:": "Lateral",
+    "Posição solar/Face:": "Leste",
+    "Topografia:": "Plano",
+    "pe_direito_pavilhao": "6",
+    "andares_padrao": "1",
+    "Tipo de pavimentação": "Brita",
+    "Tipo de vaga": "Própria",
+    "Característica da vaga": "Vaga fixa",
+    "Anunciar:": "Sim",
+    "Comunicar proprietário:": "Não",
+    "Imóvel em destaque:": "Sim",
+    "Imóvel em super destaque:": "Sim",
+    "Usar título no meu site?": "Sim",
+    "Placa no local:": "Não",
+    "*Tipo de Comissão:": "Captador",
+    "Exclusividade:": "Não",
+    "Publicar valor no site:": "Publicar venda e locação"
+  },
+  "ensinado": [
+    "apartamento",
+    "casa",
+    "pavilhao",
+    "sala"
+  ],
+  "garantias": [
+    "Aluguel antecipado",
+    "Seguro Fiança",
+    "Caução",
+    "Kenlo Garante"
+  ],
+  "infraestrutura": [
+    "Água",
+    "Alarme"
+  ],
+  "piso": [
+    "Piso frio"
+  ],
+  "apartamento": {
+    "pe_direito": "3",
+    "caixas": [
+      "Interfone"
+    ],
+    "salas": "1",
+    "piso": [
+      "Porcelanato",
+      "Vinílico",
+      "Mármore"
+    ]
+  }
+}

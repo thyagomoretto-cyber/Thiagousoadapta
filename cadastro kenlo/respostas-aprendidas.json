@@ -1,0 +1,26 @@
+{
+  "moretto|Proprietário|*Nome do proprietário:|o campo não respondeu": {
+    "acao": "passos",
+    "valor": "[{\"texto\": \"Sim\"}]"
+  },
+  "moretto|Localização do imóvel|Logradouro:|o campo não respondeu": {
+    "acao": "passos",
+    "valor": "[{\"texto\": \"Sim\"}]"
+  },
+  "moretto|Localização do imóvel|Número|campo nao encontrado": {
+    "acao": "passos",
+    "valor": "[{\"texto\": \"Informe 1 caractere\"}, {\"texto\": \"Logradouro\\nCEP\"}]"
+  },
+  "moretto|Detalhes|Topografia:|lista nao encontrada": {
+    "acao": "pular",
+    "valor": ""
+  },
+  "moretto|Detalhes|Água|caixa nao encontrada": {
+    "acao": "pular",
+    "valor": ""
+  },
+  "moretto|Características|Valor do condomínio:|campo nao encontrado": {
+    "acao": "pular",
+    "valor": ""
+  }
+}

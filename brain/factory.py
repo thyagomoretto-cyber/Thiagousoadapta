@@ -113,6 +113,7 @@ ROUTER_TOOLS = frozenset({
     # worker set, AP-5/AP-14). ``society-status`` reads the roster and the
     # last events - no model call, risk safe. See ADR-0011 amendment
     # "Agent society voice tools".
+    "ask-owner",
     "delegate-to-agent",
     "society-status",
     "message-agent",

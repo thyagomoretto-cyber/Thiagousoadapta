@@ -6,13 +6,14 @@ Salvar publica nos portais, por isso depende de ``salvar_liberado`` nas regras.
 """
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
 import threading
 import unicodedata
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Callable, Final
 
 from dodaios.core import cadastro_plan as plan, property_intake as intake
 
@@ -22,6 +23,7 @@ _STATUS = re.compile(r"\b(?:quais|quantos|como (?:esta|anda|foi)|o que)\b.*\b(?:
 _AGENT_WORDS = re.compile(r"\b(?:agente|especialista|fila|ja cadastr\w*|cadastrou|cadastrados|faltam|pendentes)\b")
 _LOCK = threading.Lock()
 _process: subprocess.Popen[bytes] | None = None
+_watcher: threading.Thread | None = None
 
 
 def _fold(text: str) -> str:
@@ -48,7 +50,46 @@ def can_save() -> bool:
     return _rules().get("salvar_liberado") is True
 
 
-def start(save: bool, group: str = GROUP) -> None:
+def result_message() -> str:
+    """Conta ao dono, em uma frase, como terminou a ultima execucao."""
+    try:
+        lines = _log_path().read_text("utf-8", "replace").splitlines()
+    except OSError:
+        return "O agente terminou sem deixar registro."
+    read = [line for line in lines if line.startswith("WHATSAPP_LIDO=")]
+    info = json.loads(read[-1].split("=", 1)[1]) if read else {}
+    results = [re.sub(r"\s/\S+$", "", line.split("=", 1)[1]) for line in lines if line.startswith("KENLO_RESULTADO=")]
+    if not read:
+        return f"Não consegui ler o grupo: {lines[-1][:160] if lines else 'sem registro'}."
+    if not info.get("mensagens"):
+        return "Abri o grupo, mas não consegui ler nenhuma mensagem."
+    done = [item.split()[-1] for item in results if item.startswith("SALVO")]
+    if results and results[-1].startswith("FILA_VAZIA") or not results:
+        return (f"Li {info.get('mensagens', 0)} fichas no grupo: o último código é o {info.get('maior_codigo', 0)} e eu começo no {info.get('codigo_inicial', 0)}. "
+                "Não há imóvel novo para cadastrar.")
+    labels = {"PREENCHIDO": "Preenchi {} sem salvar.", "FALTANDO": "Parei no {}: faltam dados na ficha.", "FALHOU": "Parei no {}: alguns campos falharam e nada foi salvo.",
+              "FOTOS_EM_DUVIDA": "Parei no {}: há fotos em dúvida. Veja com o Especialista em Fotos.", "TIPO_NAO_ENSINADO": "Parei no {}: esse tipo ainda não foi ensinado.",
+              "JA_CADASTRADO": "{} já estava cadastrado.", "SEM_IMOVEL": "Não encontrei o imóvel {}.", "SALVO": "Salvei {}."}
+    parts = [labels.get(item.split()[0], item) .format(" ".join(item.split()[1:3])) for item in results]
+    return " ".join(parts + ([f"Referências: {', '.join(done)}."] if done else []))
+
+
+def busy() -> bool:
+    return running() or (_watcher is not None and _watcher.is_alive())
+
+
+def _tell_when_done(process: subprocess.Popen, on_finish: Callable[[str], None]) -> None:
+    global _watcher
+
+    def wait() -> None:
+        process.wait()
+        on_finish(result_message())
+
+    _watcher = threading.Thread(target=wait, name="agente-imoveis-fim", daemon=True)
+    _watcher.start()
+
+
+def start(save: bool, group: str = GROUP, on_finish: Callable[[str], None] | None = None) -> None:
     """Inicia o agente. Recusa se ja estiver rodando ou se salvar nao foi liberado."""
     global _process
     if save and not can_save():
@@ -62,6 +103,42 @@ def start(save: bool, group: str = GROUP) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as output:
             _process = subprocess.Popen(command, cwd=str(script.parents[1]), stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        if on_finish:
+            _tell_when_done(_process, on_finish)
+
+
+def reading_message() -> str:
+    try:
+        lines = _log_path().read_text("utf-8", "replace").splitlines()
+    except OSError:
+        return "A leitura terminou sem deixar registro."
+    done = [line for line in lines if line.startswith("LEITURA_RESULTADO=")]
+    if not done:
+        written = [line.strip() for line in lines if line.strip() and not line.startswith(" ")]
+        return f"A leitura parou: {written[-1][:160] if written else 'sem registro'}."
+    info = json.loads(done[-1].split("=", 1)[1])
+    return f"Li {info['lidos']} cadastros do Kenlo: {info['por_tipo']}. Falhas: {info['falhas']}. Relatório em Downloads: {info['relatorio']}."
+
+
+def read_kenlo(on_finish: Callable[[str], None], per_type: int = 100) -> None:
+    """Le cadastros prontos do Kenlo para aprender. Nunca altera nada la."""
+    global _process, _watcher
+    with _LOCK:
+        if running():
+            raise RuntimeError("O agente ja esta trabalhando")
+        script = Path.home() / ".dodaios" / "bridge" / "ja-kenlo-leitura.py"
+        path = _log_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as output:
+            _process = subprocess.Popen([sys.executable, str(script), "--por-tipo", str(per_type)], cwd=str(script.parents[1]), stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+        process = _process
+
+    def wait() -> None:
+        process.wait()
+        on_finish(reading_message())
+
+    _watcher = threading.Thread(target=wait, name="leitura-kenlo-fim", daemon=True)
+    _watcher.start()
 
 
 def _last_event() -> str:

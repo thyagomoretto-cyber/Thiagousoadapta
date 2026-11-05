@@ -75,7 +75,8 @@ def classify(text: str) -> dict[str, Any]:
     if stated and kind:
         purpose = stated.group(1)
     # Se a ficha nao fala em condominio, o imovel nao esta em um.
-    condominium = bool(_CONDOMINIUM.search(folded)) and not _NOT_CONDOMINIUM.search(folded)
+    said_no = re.search(r"^\s*condominio\s*:\s*(nao|nenhum|sem)\b", folded, re.MULTILINE)
+    condominium = bool(_CONDOMINIUM.search(folded)) and not _NOT_CONDOMINIUM.search(folded) and not said_no
     return {"tipo": kind, "finalidade": purpose, "condominio": condominium, "duvidas": doubts}
 
 
@@ -181,9 +182,32 @@ def all_items() -> list[dict[str, Any]]:
         return sorted(_load().values(), key=_queue_order)
 
 
-def next_pending() -> dict[str, Any] | None:
+def retry_stopped() -> int:
+    """Um pedido novo do dono volta a tentar o que parou por falha ou por fotos."""
     with _LOCK:
-        pending = [item for item in _load().values() if item["status"] == PENDING]
+        ledger = _load()
+        stopped = [item for item in ledger.values() if item["status"] == REVIEW and re.match(r"(falhou em|fotos em duvida|modelo de imagens|ficha diferente)", _fold(item.get("nota", "")))]
+        for item in stopped:
+            item["status"] = PENDING
+        if stopped:
+            _save(ledger)
+    return len(stopped)
+
+
+def code_of(key: str) -> int | None:
+    found = re.fullmatch(r"codigo-(\d+)", key)
+    return int(found.group(1)) if found else None
+
+
+def before_start(key: str, first_code: int) -> bool:
+    """Codigo anterior ao ponto de partida escolhido pela empresa."""
+    code = code_of(key)
+    return code is not None and code < first_code
+
+
+def next_pending(first_code: int = 0) -> dict[str, Any] | None:
+    with _LOCK:
+        pending = [item for item in _load().values() if item["status"] == PENDING and not before_start(item["chave"], first_code)]
     return min(pending, key=_queue_order) if pending else None
 
 

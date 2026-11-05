@@ -63,6 +63,15 @@ SEQUENCES: Final[dict[str, tuple[str, ...]]] = {
         "frente_rua", "ruas_proximas", "aereas", "dimensoes", "infraestrutura", "demais",
     ),
 }
+FLOORS: Final[tuple[str, ...]] = (
+    "Aquecido", "Ardósia", "Bloquete", "Carpete", "Carpete de acrílico", "Carpete de madeira", "Carpete de nylon", "Cerâmica", "Cimento queimado",
+    "Contrapiso", "Emborrachado", "Granito", "Laminado", "Mármore", "Porcelanato", "Tábua", "Taco de madeira", "Vinílico", "Piso frio",
+)
+VISIBLE_ITEMS: Final[tuple[str, ...]] = (
+    "Alarme", "Aquecimento de água à gás", "Ar condicionado", "Calefação", "Churrasqueira", "Closet", "Copa", "Depósito", "Despensa", "Divisória", "Elevador", "Escritório",
+    "Gerador", "Hidromassagem", "Interfone", "Lareira", "Lavabo", "Lavanderia", "Mezanino", "Mobiliado", "Piscina", "Playground", "Portão eletrônico", "Pé direito duplo",
+    "Quintal", "Recepção", "Refeitório", "Sacada", "Semi-Mobiliado", "Varanda", "Vestiário", "Zelador", "Área de serviço",
+)
 # O minimo para o anuncio ficar completo: faltando, avisa antes de publicar.
 ESSENTIALS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
     "casa": {"fachada": ("fachada",), "sala": ("sala_estar", "sala_jantar"), "cozinha": ("cozinha",), "dormitorio": ("dormitorio_principal", "dormitorio_2"), "banheiro": ("banheiro_suite", "banheiro_social", "banheiro_2")},

@@ -9,6 +9,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -17,6 +18,9 @@ PER_TYPE: Final[int] = 100
 COMMON_SHARE: Final[float] = 0.7
 MIN_RECORDS: Final[int] = 3
 MIN_SIMILAR: Final[int] = 3
+SPECIALIST_SKILL: Final[str] = "cadastrar-imovel-no-kenlo"
+BASE_TITLE: Final[str] = "Cadastros lidos do Kenlo"
+KNOWLEDGE_HIDDEN: Final[re.Pattern[str]] = re.compile(r"corretor|cadastro por|propriet|endere|logradouro|n[uú]mero$|complemento|cep|t[ií]tulo|descri|site|portais|tipofoto|data de|filial|ano de|valor|bairro|taxa de|buscar por|adicionar|classifica|cidade|estado|^(sim|n[aã]o|venda|loca[cç][aã]o|foto de capa|somente .*|venda/loca[cç][aã]o)$", re.IGNORECASE)
 SIMILAR_SHARE: Final[float] = 0.6
 SUGGESTED_FIELDS: Final[tuple[str, ...]] = ("Padrão", "Padrão da localização", "Posição solar/Face", "Topografia")
 PRIVATE: Final[re.Pattern[str]] = re.compile(r"propriet|nome(?! do condom)|tel\b|tel\.|celular|e-?mail|cpf|rg\b|cnpj|chave|senha|comiss|confidencial|coment|observa", re.IGNORECASE)
@@ -122,6 +126,78 @@ def suggest(kind: str, purpose: str, neighborhood: str, condominium: str, items:
     fields = {f"{name}:": common["campos"][name] for name in SUGGESTED_FIELDS if common["campos"].get(name) not in (None, "", "Não informado")}
     boxes = [name for name in common["marcados"] if name in items] if wanted and source.startswith("condom") else []
     return {"campos": fields, "marcados": boxes, "fonte": f"{len(close)} imóveis do {source}"}
+
+
+def _money(value: float) -> str:
+    return f"R$ {value:,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+
+
+def _middle(values: list[float]) -> float:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def _prices(records: list[dict[str, Any]], field: str, label: str) -> str:
+    values = [float(item.get("lista", {}).get(field) or 0) for item in records]
+    values = [value for value in values if value > 1]
+    return f"{label}: de {_money(min(values))} a {_money(max(values))}, valor do meio {_money(_middle(values))} ({len(values)} imóveis)." if values else ""
+
+
+def _boxes(common: dict[str, Any]) -> str:
+    return ", ".join(box for box in common["marcados"] if not KNOWLEDGE_HIDDEN.search(box)) or "nenhum em comum"
+
+
+def knowledge_chunks(records: list[dict[str, Any]], today: str) -> list[str]:
+    """Texto que o especialista consulta: resumos, sem proprietarios nem cadastros individuais."""
+    pieces = []
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        groups.setdefault(f"{record.get('tipo', '')} {record.get('finalidade', '')}", []).append(record)
+    for name, items in sorted(groups.items()):
+        common = _common(items, 0.6)
+        fields = "; ".join(f"{key}: {value}" for key, value in common["campos"].items() if not KNOWLEDGE_HIDDEN.search(key))
+        lines = [f"Cadastros de {name}: {len(items)} imóveis lidos em {today}.", _prices(items, "sale_price", "Venda"), _prices(items, "rent_price", "Locação"),
+                 f"Campos mais usados: {fields}.", f"Itens mais marcados: {_boxes(common)}."]
+        pieces.append(" ".join(line for line in lines if line))
+    condos: dict[str, list[dict[str, Any]]] = {}
+    places: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        info = record.get("lista", {})
+        place = info.get("enterprise") or ""
+        name = str(place.get("name", "") if isinstance(place, dict) else place).strip()
+        if re.search(r"\w", name):
+            condos.setdefault(name, []).append(record)
+        area = str(info.get("location_neighborhood") or "").strip()
+        if area:
+            places.setdefault(f"{record.get('tipo', '')} no bairro {area}, {info.get('location_city') or ''}", []).append(record)
+    for name, items in sorted(condos.items()):
+        info = items[0].get("lista", {})
+        beds: dict[str, list[float]] = {}
+        for item in items:
+            price = float(item.get("lista", {}).get("condo_price") or 0)
+            if price > 1:
+                beds.setdefault(str(item.get("lista", {}).get("beds") or "?"), []).append(price)
+        fees = "; ".join(f"{bed} dormitórios: condomínio mais comum {_money(Counter(values).most_common(1)[0][0])} ({len(values)} imóveis)" for bed, values in sorted(beds.items()))
+        common = _common(items, 0.6)
+        lines = [f"Condomínio {name}, bairro {info.get('location_neighborhood') or ''}, {info.get('location_city') or ''}: {len(items)} imóveis lidos em {today}.",
+                 fees, _prices(items, "municipal_property_tax", "IPTU"), f"Itens comuns: {_boxes(common)}."]
+        pieces.append(" ".join(line for line in lines if line))
+    for name, items in sorted(places.items()):
+        lines = [f"Imóveis {name}: {len(items)} lidos em {today}.", _prices(items, "sale_price", "Venda"), _prices(items, "rent_price", "Locação"), _prices(items, "municipal_property_tax", "IPTU")]
+        pieces.append(" ".join(line for line in lines if line))
+    return pieces
+
+
+def teach_specialist(today: str = "") -> int:
+    """Coloca a base lida na memoria do especialista de cadastro no Kenlo."""
+    from dodaios.core import knowledge
+    from dodaios.core.paths import user_data_dir
+
+    pieces = knowledge_chunks(load_all(), today or datetime.now().strftime("%d/%m/%Y"))
+    total = 0
+    for target in (user_data_dir() / "data" / "company_knowledge").glob(f"*/{SPECIALIST_SKILL}*"):
+        total += knowledge.add_own(target.parent.name, target.name, BASE_TITLE, pieces)
+    return total
 
 
 def summarize() -> dict[str, Any]:

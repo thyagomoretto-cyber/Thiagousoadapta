@@ -31,6 +31,7 @@ MIN_PAGE_CHARS: Final[int] = 800
 MAX_PAGE_CHARS: Final[int] = 2_500_000
 CHUNK_CHARS: Final[int] = 1_200
 TOP_CHUNKS: Final[int] = 6
+OWN_BOOST: Final[float] = 1.5
 FETCH_TIMEOUT_S: Final[float] = 25.0
 ANSWER_TIMEOUT_S: Final[float] = 180.0
 ANSWER_TOKENS: Final[int] = 4000
@@ -244,6 +245,8 @@ async def research(company_id: str, skill_id: str, topic: str, on_done: Callable
         index = len(sources)
         sources.append({"url": url, "titulo": title or found[url].get("title", url), "oficial": is_official(url), "tamanho": len(text)})
         saved += [{"fonte": index, "texto": piece} for piece in chunks(text)]
+    if saved:
+        sources, saved = _with_own(previous, sources, saved, _chunks_of(company_id, skill_id))
     state = {"estado": "pronto" if saved else "sem_fontes", "tema": topic, "fontes": sources, "trechos": len(saved), "versao": STUDY_VERSION,
              "quando": datetime.now(UTC).isoformat(timespec="seconds")}
     with _LOCK:
@@ -260,6 +263,28 @@ async def research(company_id: str, skill_id: str, topic: str, on_done: Callable
 def mark(company_id: str, skill_id: str, **fields: Any) -> None:
     with _LOCK:
         _write_json(_folder(company_id, skill_id) / "estado.json", {**status(company_id, skill_id), **fields})
+
+
+def _with_own(previous: dict[str, Any], sources: list[dict[str, Any]], saved: list[dict[str, Any]], old: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Um novo estudo na web nao apaga o que a propria empresa ensinou."""
+    own = [source for source in previous.get("fontes", []) if source.get("propria")]
+    if not own:
+        return sources, saved
+    return [*sources, own[0]], [*saved, *({**item, "fonte": len(sources)} for item in old if item.get("propria"))]
+
+
+def add_own(company_id: str, skill_id: str, title: str, pieces: list[str]) -> int:
+    """Troca a fonte propria da empresa, mantendo o que veio de outras fontes."""
+    with _LOCK:
+        state = status(company_id, skill_id)
+        sources = [source for source in state.get("fontes", []) if not source.get("propria")]
+        kept = [item for item in _chunks_of(company_id, skill_id) if not item.get("propria")]
+        saved = kept + [{"fonte": len(sources), "texto": piece, "propria": True} for piece in pieces]
+        folder = _folder(company_id, skill_id)
+        _write_json(folder / "trechos.json", saved)
+        _write_json(folder / "estado.json", {**state, "estado": "pronto", "trechos": len(saved),
+                                             "fontes": [*sources, {"url": "", "titulo": title, "oficial": False, "tamanho": sum(map(len, pieces)), "propria": True}]})
+    return len(pieces)
 
 
 def needs_study(company_id: str, skill_id: str) -> bool:
@@ -333,6 +358,7 @@ def search(company_id: str, skill_id: str, question: str, limit: int = TOP_CHUNK
         if article and re.match(rf"art\.?\s*{article.group(1)}\b", _fold(item["texto"])):
             score += 50
         if score > 0:
+            score *= OWN_BOOST if item.get("propria") else 1
             scored.append((score, {**item, "cobertura": round(sum(term in bag for term in wanted) / len(wanted), 2)}))
     scored.sort(key=lambda pair: -pair[0])
     sources = status(company_id, skill_id).get("fontes", [])

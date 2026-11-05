@@ -340,6 +340,7 @@ def run(per_type: int, everything: bool = False) -> int:
                 print("LEITURA_LISTA=" + json.dumps(shape[-1], ensure_ascii=False), flush=True)
                 going = read_batch(listing, chosen, purpose, goal, failed, questions, study)
         summary = study.summarize()
+        print(f"LEITURA_ESPECIALISTA={study.teach_specialist()} resumos", flush=True)
         context.close()
     lines = [f"Leitura do Kenlo em {time.strftime('%d/%m/%Y %H:%M')}", f"Lista: {json.dumps(shape, ensure_ascii=False)}", f"Por tipo: {summary['por_tipo']}", f"Falhas: {failed}", ""]
     for kind, data in summary["tipos"].items():

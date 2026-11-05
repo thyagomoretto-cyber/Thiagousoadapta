@@ -41,7 +41,8 @@ WHEEL_PIXELS = 500
 WHEEL_WAIT_MS = 900
 VIEWER_WAIT_MS = 1_500
 VIEWER_STEP_MS = 500
-PHOTO_WAIT_S = 10
+PHOTO_WAIT_S = 20
+MAX_MISSED_PHOTOS = 2
 
 # O WhatsApp muda a estrutura da pagina: sem o seletor de texto, usa o texto visivel.
 READ_MESSAGES_JS = """() => {
@@ -250,14 +251,18 @@ def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
         wait_place(page, viewer_place(page)[0] - 1)
     count = total or count
     seen: set[str] = set()
+    missed = 0
     for number in range(count):
         photo = next_photo(page, seen)
-        if not photo:
-            break
-        seen.add(photo["src"])
-        path = folder / f"{number + 1:02d}.{'png' if 'png' in photo['type'] else 'jpg'}"
-        path.write_bytes(base64.b64decode(photo["data"]))
-        saved.append(str(path))
+        if photo:
+            seen.add(photo["src"])
+            path = folder / f"{number + 1:02d}.{'png' if 'png' in photo['type'] else 'jpg'}"
+            path.write_bytes(base64.b64decode(photo["data"]))
+            saved.append(str(path))
+        else:
+            missed += 1
+            if missed > MAX_MISSED_PHOTOS:
+                break  # uma foto lenta nao derruba as seguintes
         if number + 1 < count:
             page.keyboard.press("ArrowRight")
             page.wait_for_timeout(VIEWER_STEP_MS)

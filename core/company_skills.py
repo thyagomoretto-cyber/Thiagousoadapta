@@ -294,6 +294,15 @@ def add_correction(company_id: str, skill_id: str, text: str) -> dict[str, Any]:
         return skill
 
 
+def remove_correction(company_id: str, skill_id: str, text: str) -> None:
+    with _LOCK:
+        path = _path(company_id, skill_id)
+        skill = _read(path)
+        skill["corrections"] = [item for item in skill["corrections"] if item["text"] != text]
+        _record(skill, "Correcao removida", {})
+        _write(path, skill)
+
+
 def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]{3,}", _fold(text)) if w not in _STOPWORDS}
 

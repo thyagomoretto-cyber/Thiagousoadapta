@@ -193,7 +193,7 @@ def digits(text: str) -> str:
 class Form:
     """Preenche o formulario pelos rotulos que aparecem na tela."""
 
-    def __init__(self, page, company: str = "") -> None:
+    def __init__(self, page, company: str = "", kind: str = "") -> None:
         self.page = page
         page.set_default_timeout(FIELD_TIMEOUT_MS)
         page.set_default_navigation_timeout(NAVIGATION_TIMEOUT_MS)
@@ -203,6 +203,7 @@ class Form:
         self.condo_found = False
         self.stopped = False
         self.company = company
+        self.kind = kind
 
     def _control(self, section: str, field: str, types: list[str], wait_ms: int = FIELD_WAIT_MS):
         limit = time.monotonic() + wait_ms / 1000
@@ -452,11 +453,13 @@ class Form:
 
     def _try_alone(self, step: dict, problem: str, photos: list[str]) -> bool:
         """Antes de perguntar, olha a tela e tenta uma vez o que parecer resolver."""
-        from dodaios.core import agent_questions as questions, photo_vision as vision
+        from dodaios.core import agent_questions as questions, company_lessons as lessons, photo_vision as vision
 
         field = step["campo"]
         try:
-            hint = vision.screen_help(self.page.screenshot(type="jpeg", quality=70), field.strip("*:"), problem)
+            taught = lessons.guidance(lessons.for_agent(self.company), self.kind, field, problem)
+            self.log += [f"ENSINAMENTO USADO {field}: {taught[:120]}"] if taught else []
+            hint = vision.screen_help(self.page.screenshot(type="jpeg", quality=70), field.strip("*:"), f"{problem}. Orientação do dono: {taught}" if taught else problem)
             if hint["acao"] == "esperar":
                 self.page.wait_for_timeout(ALONE_WAIT_MS)
             elif hint["acao"] == "clicar" and hint["texto"] and not questions.forbidden_click(hint["texto"]):
@@ -652,7 +655,7 @@ def ask_counts(item: dict, sheet: dict, notes: list[str]) -> dict:
 
 def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     """Ficha, sequencia de fotos, anuncio e plano do imovel."""
-    from dodaios.core import kenlo_study as study
+    from dodaios.core import company_lessons as lessons, kenlo_study as study
     from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision, property_intake as intake
     from dodaios.core.property_sheet import parse_sheet
 
@@ -685,6 +688,8 @@ def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     text = plan.clean_ad(vision.write_ad(plan.ad_prompt(item, sheet, rules)), sheet) or plan.template_ad(item, sheet, rules["nome_empresa"], rules)
     built = plan.build_plan(item, sheet, rules, text)
     built["conferir"] += notes + vision.problems
+    built["passos"], taught = lessons.apply(lessons.for_agent(rules["empresa"]), item.get("tipo", ""), built["passos"])
+    built["conferir"] += taught
     built["ficha"] = sheet
     built["divergencias"] = plan.compare_with_photos(sheet, details)
     if not details.get("contagens") and not details["itens"]:
@@ -755,7 +760,7 @@ def final_record(page, item: dict) -> dict | None:
 
 def learn_from_finished(page) -> None:
     """Compara os cadastros finalizados e pergunta antes de mudar qualquer regra."""
-    from dodaios.core import agent_questions as questions, cadastro_plan as plan, property_intake as intake
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan, kenlo_learning as learning, property_intake as intake
 
     rules = plan.load_rules()
     for item in learning.waiting(intake.all_items(), int(rules.get("codigo_inicial", 0)), intake.code_of):
@@ -819,7 +824,7 @@ def fill(page, key: str, save: bool) -> bool:
     page.bring_to_front()
     page.goto("about:blank")
     wait_login(page, URL or plan.NEW_PROPERTY_URL)
-    form = Form(page, rules.get("empresa", ""))
+    form = Form(page, rules.get("empresa", ""), item.get("tipo", ""))
     page.wait_for_timeout(2500)
     form.run(built["passos"], photos)
     intake.update(key, preenchido=learning.snapshot(built["passos"]))

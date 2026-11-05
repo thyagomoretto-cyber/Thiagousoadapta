@@ -255,6 +255,20 @@ def _legal_note(company: Any, sector: str) -> str:
     return f"\nEm duvida legal, consulte o Juridico antes de agir.{' Especialidades: ' + ', '.join(names) + '.' if names else ''}"
 
 
+def lesson_route(company: Any, text: str) -> dict[str, Any]:
+    """Quem deve aprender: o especialista da tarefa, passando pelo gerente do setor."""
+    skill = _best_skill(company, text)
+    if not skill and re.search(r"imove|kenlo|cadastr|codigo|\bfoto", fold(text)):
+        skill = next((item for item in store.list_skills(company.id) if "kenlo" in fold(item["name"])), None)
+    person = next((item for item in company.members if skill and item.id == skill.get("specialistId")), None)
+    sector = person.departmentId if person else _ask_sector(company, text)
+    manager = manager_of(company, sector)
+    person = person or manager
+    chain = list(dict.fromkeys(item for item in ("Gerente Geral", manager.name if manager else "", person.name if person else "") if item))
+    return {"rota": chain, "setor": sector, "membro": person.id if person else "", "responsavel": person.name if person else "Gerente Geral",
+            "habilidade": (skill or {}).get("id", ""), "agente": bool(skill and re.search(r"imove|kenlo", fold(skill["name"])))}
+
+
 def route_task(company: Any, text: str, member_id: str = "") -> dict[str, Any]:
     """Decide quem faz a tarefa e monta o pedido para ele."""
     skill = _best_skill(company, text, member_id)

@@ -15,6 +15,7 @@ from dodaios.core import company_skills as store
 from dodaios.core import company_org as org
 from dodaios.core import agent_questions as questions
 from dodaios.core import company_chat as chat
+from dodaios.core import company_lessons as lessons
 from dodaios.core import knowledge
 
 from .companies_routes import CompanyTask, Department, Member, _read_state, _write_state, remember_fired
@@ -670,6 +671,71 @@ def company_conversation(company_id: str) -> dict:
     return {"mensagens": messages, "estudando": property_agent.busy() or any(knowledge.status(company_id, skill)["estado"] in ("aguardando", "pesquisando") for skill in open_studies)}
 
 
+def _finish_lesson(company_id: str) -> None:
+    """Depois do sim do dono: guarda com o responsavel e confirma quem aprendeu."""
+    lesson = lessons.confirm(company_id)
+    text = lessons.describe(lesson)
+    if lesson["habilidade"]:
+        store.add_correction(company_id, lesson["habilidade"], text)
+        knowledge.teach(company_id, lesson["habilidade"], text)
+    chat.add(company_id, "empresa", f"Aprendido. {lesson['responsavel']} já segue isso a partir do próximo trabalho.", rota=lesson["rota"])
+
+
+def _list_lessons(company_id: str) -> None:
+    items = lessons.all_lessons(company_id)
+    lines = [f"{index}. {lessons.describe(item)} ({item['responsavel']})" for index, item in enumerate(items, 1)]
+    chat.add(company_id, "empresa", "\n".join(lines) or "Ainda não recebi nenhum ensinamento por aqui.", rota=["Gerente Geral"])
+
+
+def _forget_lesson(company_id: str, number: int) -> None:
+    removed = lessons.forget(company_id, number)
+    if removed and removed["habilidade"]:
+        text = lessons.describe(removed)
+        store.remove_correction(company_id, removed["habilidade"], text)
+        knowledge.unteach(company_id, removed["habilidade"], text)
+    chat.add(company_id, "empresa", f"Esqueci o ensinamento {number}." if removed else f"Não existe ensinamento {number}.", rota=["Gerente Geral"])
+
+
+def _study_lesson(company_id: str, company, text: str) -> None:
+    """O gerente entende a licao e devolve para o dono confirmar."""
+    from dodaios.core import cadastro_plan as plan, kenlo_study as study, photo_vision as vision
+
+    try:
+        rules, summary = plan.load_rules(), json.loads((study.folder() / "resumo.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rules, summary = {}, {}
+    found = lessons.understand(text, lessons.known_fields(rules, summary), sorted(plan.KIND_LABELS), vision._chat)
+    route = org.lesson_route(company, text)
+    lesson = lessons.propose(company_id, found, route)
+    effect = " Isso muda o preenchimento automático." if found["campo"] else " Fica como orientação: ele consulta e usa quando travar."
+    warning = "" if found["modelo"] else " O modelo está desligado, então guardei como você escreveu."
+    chat.add(company_id, "empresa", f"Entendi: {lessons.describe(lesson)}{effect}{warning} Passo para {route['responsavel']}. Confirma?", rota=route["rota"])
+
+
+def _handle_lesson(company_id: str, company, text: str) -> bool:
+    """Ensinar, confirmar, listar ou esquecer. Falso se a mensagem for outra coisa."""
+    from dodaios.core import kenlo_learning as learning
+
+    if lessons.pending(company_id):
+        if learning.answer_is_yes(text):
+            _finish_lesson(company_id)
+            return True
+        if lessons.is_refusal(text):
+            lessons.discard(company_id)
+            chat.add(company_id, "empresa", "Certo, não guardei.", rota=["Gerente Geral"])
+            return True
+    number = lessons.wants_forget(text)
+    if number is not None:
+        _forget_lesson(company_id, number)
+    elif lessons.wants_list(text):
+        _list_lessons(company_id)
+    elif lessons.is_lesson(text):
+        _study_lesson(company_id, company, text)
+    else:
+        return False
+    return True
+
+
 @voice_router.post("/empresa/{company_id}/conversa")
 def talk_to_company(company_id: str, body: ChatMessage) -> dict:
     """O dono fala com a empresa: pergunta vira resposta e ordem vira tarefa."""
@@ -682,6 +748,8 @@ def talk_to_company(company_id: str, body: ChatMessage) -> dict:
     _state, company = _organized(company_id)
     feedback = _agent_feedback(company_id, body.texto)
     chat.add(company_id, "voce", body.texto)
+    if _handle_lesson(company_id, company, body.texto):
+        return {"ok": True}
     if _READ_KENLO.search(org.fold(body.texto)):
         from dodaios.core import property_agent
 

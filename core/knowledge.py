@@ -278,13 +278,36 @@ def add_own(company_id: str, skill_id: str, title: str, pieces: list[str]) -> in
     with _LOCK:
         state = status(company_id, skill_id)
         sources = [source for source in state.get("fontes", []) if not source.get("propria")]
-        kept = [item for item in _chunks_of(company_id, skill_id) if not item.get("propria")]
-        saved = kept + [{"fonte": len(sources), "texto": piece, "propria": True} for piece in pieces]
+        old = _chunks_of(company_id, skill_id)
+        kept = [item for item in old if not item.get("propria")]
+        taught = [{**item, "fonte": len(sources)} for item in old if item.get("licao")]
+        saved = kept + taught + [{"fonte": len(sources), "texto": piece, "propria": True} for piece in pieces]
         folder = _folder(company_id, skill_id)
         _write_json(folder / "trechos.json", saved)
         _write_json(folder / "estado.json", {**state, "estado": "pronto", "trechos": len(saved),
                                              "fontes": [*sources, {"url": "", "titulo": title, "oficial": False, "tamanho": sum(map(len, pieces)), "propria": True}]})
     return len(pieces)
+
+
+def teach(company_id: str, skill_id: str, text: str) -> None:
+    """Licao do dono: fica junto da fonte propria e sobrevive a novos estudos e leituras."""
+    with _LOCK:
+        state = status(company_id, skill_id)
+        sources = state.get("fontes", [])
+        place = next((index for index, source in enumerate(sources) if source.get("propria")), None)
+        if place is None:
+            place, sources = len(sources), [*sources, {"url": "", "titulo": "Ensinado pelo dono", "oficial": False, "tamanho": 0, "propria": True}]
+        saved = [*_chunks_of(company_id, skill_id), {"fonte": place, "texto": text, "propria": True, "licao": True}]
+        folder = _folder(company_id, skill_id)
+        _write_json(folder / "trechos.json", saved)
+        _write_json(folder / "estado.json", {**state, "estado": "pronto", "fontes": sources, "trechos": len(saved)})
+
+
+def unteach(company_id: str, skill_id: str, text: str) -> None:
+    with _LOCK:
+        saved = [item for item in _chunks_of(company_id, skill_id) if not (item.get("licao") and item["texto"] == text)]
+        _write_json(_folder(company_id, skill_id) / "trechos.json", saved)
+        _write_json(_folder(company_id, skill_id) / "estado.json", {**status(company_id, skill_id), "trechos": len(saved)})
 
 
 def needs_study(company_id: str, skill_id: str) -> bool:

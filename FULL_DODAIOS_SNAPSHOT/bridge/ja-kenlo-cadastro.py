@@ -116,11 +116,15 @@ SAVE_WARNING_JS = r"""
 () => {
   const shown = [...document.querySelectorAll('.modal, .alert, .swal2-popup, .toast, .error, .erro, .has-error, .help-block, [role=alert], [class*=erro], [class*=invalid]')]
     .filter((node) => node.getClientRects().length).map((node) => (node.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 6);
+  const nameOf = (node) => (node.closest('div, td, li')?.querySelector('label')?.innerText || node.name || node.id || '').trim();
+  const fields = [...document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea')].filter((node) => node.getClientRects().length);
+  const empty = fields.filter((node) => !node.value && nameOf(node).startsWith('*')).map(nameOf).slice(0, 6);
+  if (empty.length) shown.push(`obrigatórios vazios: ${empty.join(', ')}`);
+  const red = fields.filter((node) => /^rgb\((1[5-9]\d|2\d\d), ?\d{1,2}, ?\d{1,2}\)/.test(getComputedStyle(node).borderColor)).map(nameOf).slice(0, 6);
+  if (red.length) shown.push(`campos em vermelho: ${red.join(', ')}`);
   const focused = document.activeElement;
-  const box = focused && focused.closest('div, td, li');
-  const label = box && box.querySelector('label');
-  if (label) shown.push(`campo em destaque: ${label.innerText.trim()}`);
-  return shown.join(' | ').slice(0, 400);
+  if (fields.includes(focused)) shown.push(`campo em destaque: ${nameOf(focused)}`);
+  return shown.join(' | ').slice(0, 600);
 }
 """
 SAVE_JS = r"""
@@ -843,6 +847,8 @@ def fill(page, key: str, save: bool) -> bool:
     button = page.evaluate_handle(SAVE_JS).as_element()
     if not button:
         raise LookupError("botao SALVAR nao apareceu: nada foi salvo")
+    answers: list[str] = []
+    page.on("response", lambda answer: answers.append(f"{answer.status} {answer.url.split('?')[0][-50:]}") if answer.request.method == "POST" else None)
     button.click()
     # Depois do clique nao repete: tentar de novo criaria um cadastro em dobro.
     try:
@@ -853,8 +859,9 @@ def fill(page, key: str, save: bool) -> bool:
         page.wait_for_timeout(1500)
     except Exception as exc:
         warning = page.evaluate(SAVE_WARNING_JS)
+        print(f"KENLO_SALVAR_RESPOSTAS={answers[-4:]}", flush=True)
         picture = REPORTS / f"kenlo-salvar-{key}.png"
-        page.screenshot(path=str(picture), full_page=False)
+        page.screenshot(path=str(picture), full_page=True)
         intake.mark(key, intake.REVIEW, f"Conferir no Kenlo: cliquei em Salvar e nao vi a confirmacao. {warning}"[:300])
         print(f"KENLO_RESULTADO=CONFERIR {key} {report(key, form, built, field_map, f'cliquei em salvar sem confirmacao: {plain_problem(exc)}. Na tela: {warning}')}", flush=True)
         questions.ask_owner(f"cliquei em Salvar no {key} e não vi a confirmação. Na tela: {warning or 'nenhum aviso'}. Veja a janela antes de fechar.", ["Entendi"])

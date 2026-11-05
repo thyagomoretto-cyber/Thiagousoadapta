@@ -62,5 +62,12 @@
       "Vinílico",
       "Mármore"
     ]
+  },
+  "por_tipo": {
+    "apartamento": {
+      "*Taxa de Administração (%):": "0,0000",
+      "*Tipo de Comissão:": "Selecione",
+      "*Corretor:": "Selecione"
+    }
   }
 }

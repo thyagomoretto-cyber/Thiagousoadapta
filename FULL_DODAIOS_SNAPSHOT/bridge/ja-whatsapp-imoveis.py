@@ -104,11 +104,12 @@ def group_messages(messages: list[dict]) -> list[dict]:
         count = message.get("images", 0) + (more - 1 if more else 0)
         text = (message.get("text") or "").strip()
         if text and (not count or NEW_PROPERTY.search(text)):
-            groups.append({"text": text, "first_photo": message["id"] if count else None, "photos": count})
+            groups.append({"text": text, "first_photo": message["id"] if count else None, "photos": count, "albuns": [(message["id"], count)] if count else []})
         elif groups and count:
             current = groups[-1]
             current["first_photo"] = current["first_photo"] or message["id"]
             current["photos"] += count
+            current["albuns"].append((message["id"], count))  # WhatsApp divide muitas fotos em mais de um album
             if text:
                 current["text"] += "\n" + text
     return groups
@@ -234,7 +235,7 @@ def next_photo(page, seen: set[str]) -> dict | None:
     return None
 
 
-def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
+def save_photos(page, message_id: str, count: int, folder: Path, first_number: int = 1) -> list[str]:
     """Abre a primeira foto e percorre o visualizador para pegar o tamanho real."""
     folder.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
@@ -256,7 +257,7 @@ def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
         photo = next_photo(page, seen)
         if photo:
             seen.add(photo["src"])
-            path = folder / f"{number + 1:02d}.{'png' if 'png' in photo['type'] else 'jpg'}"
+            path = folder / f"{first_number + number:02d}.{'png' if 'png' in photo['type'] else 'jpg'}"
             path.write_bytes(base64.b64decode(photo["data"]))
             saved.append(str(path))
         else:
@@ -314,7 +315,8 @@ def scan(page) -> dict:
             continue
         stored: list[str] = []
         if item["first_photo"] and not intake.has_photos(key):
-            stored = save_photos(page, item["first_photo"], item["photos"], intake.photo_folder(key))
+            for album, amount in item["albuns"]:
+                stored += save_photos(page, album, amount, intake.photo_folder(key), len(stored) + 1)
         _key, is_new = intake.receive(item["text"], stored)
         new += is_new
         known += not is_new

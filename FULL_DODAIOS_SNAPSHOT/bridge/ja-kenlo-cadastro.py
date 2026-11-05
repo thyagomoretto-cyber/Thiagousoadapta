@@ -40,7 +40,8 @@ VISION_TRIES = 6
 LOAD_TIMEOUT_MS = int(os.environ.get("JA_KENLO_CARGA_MS") or 30_000)
 KEYCHAIN_ITEM = "ja-kenlo"
 YES = re.compile(r"^\s*sim\s*$", re.IGNORECASE)
-OWNER_WAIT_MS = 3_000
+OWNER_WAIT_MS = 8_000
+OWNER_RECHECK_MS = 100
 LOGIN_WAIT_S = 300
 REVIEW_WAIT_S = int(os.environ.get("JA_KENLO_ESPERA") or 1800)
 FIELD_WAIT_MS = 15_000
@@ -270,15 +271,21 @@ class Form:
     def phone(self, section: str, field: str, value: str) -> None:
         """Telefone ja cadastrado: o Kenlo oferece o contato e a resposta e Sim."""
         self.text(section, field, value)
-        answer = self.page.get_by_role("button", name=YES).or_(self.page.locator("a, .btn").filter(has_text=YES)).first
+        if self._use_known_owner(OWNER_WAIT_MS):
+            self.log.append("OK    Proprietario ja cadastrado: usado o contato existente")
+
+    def _use_known_owner(self, wait_ms: int) -> bool:
+        """O aviso "Utilizar dados deste cliente" cobre a tela; a resposta e sempre Sim."""
+        answer = self.page.locator(".bootstrap_for_gaia", has_text="Utilizar dados deste cliente").locator("#okConfirm")
         try:
-            answer.wait_for(state="visible", timeout=OWNER_WAIT_MS)
+            answer.first.wait_for(state="visible", timeout=wait_ms)
+            answer.first.click(timeout=5000)
+            answer.first.wait_for(state="hidden", timeout=8000)
         except Exception:
-            return
-        answer.click()
+            return False
         self.page.wait_for_timeout(1200)
         self.known_owner = True
-        self.log.append("OK    Proprietario ja cadastrado: usado o contato existente")
+        return True
 
     def name(self, section: str, field: str, value: str) -> None:
         """Nome com lista de sugestoes: digita e fecha a lista sem escolher."""
@@ -611,6 +618,7 @@ class Form:
     def run(self, steps: list[dict], photos: list[str]) -> None:
         for step in steps:
             section, field = step["secao"], step["campo"]
+            self._use_known_owner(OWNER_RECHECK_MS)
             if step.get("sem_condominio") and self.condo_found:
                 self.log.append(f"PULADO {section} > {field}: veio do condominio")
                 continue
@@ -716,10 +724,15 @@ def wait_login(page, target: str) -> None:
 
 def ask_counts(item: dict, sheet: dict, notes: list[str]) -> dict:
     """Nem ficha nem fotos: pergunta ao dono antes de preencher."""
-    from dodaios.core import agent_questions as questions, cadastro_plan as plan
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan, kenlo_study as study
 
     filled = {**sheet}
     for field, name in plan.missing_counts(item, sheet):
+        usual = study.usual_count(item.get("tipo", ""), sheet.get("condominio_nome", ""), sheet["logradouro"], sheet["numero"], sheet["cidade"], field)
+        if usual["valor"]:
+            filled[field] = usual["valor"]
+            notes.append(f"{name.capitalize()}: {usual['valor']}, como {usual['iguais']} de {usual['imoveis']} imóveis parecidos da base. Confira.")
+            continue
         reply = questions.ask_owner(f"não achei na ficha nem nas fotos: quantos {name} tem o {item['chave']}? Escreva o número.", [])
         number = re.search(r"\d+", reply or "")
         if number:
@@ -993,7 +1006,7 @@ def fill(page, key: str, save: bool) -> bool:
         page.wait_for_selector("text=/refer[eê]ncia/i", timeout=SAVE_WAIT_MS)
         found = re.search(r"refer[eê]ncia\s+([A-Z]{1,3}\d+)", page.content(), re.IGNORECASE)
         reference = found.group(1) if found else ""
-        page.get_by_role("button", name=YES).locator("visible=true").first.click(timeout=10_000)
+        page.locator("#okConfirm").or_(page.get_by_role("button", name=YES)).locator("visible=true").first.click(timeout=10_000)
         page.wait_for_timeout(1500)
     except Exception as exc:
         warning = page.evaluate(SAVE_WARNING_JS)

@@ -23,6 +23,7 @@ MATCH_AVERAGE: Final[float] = 0.82
 MATCH_WORD: Final[float] = 0.6
 WEB_CONFIDENCE: Final[float] = 0.8
 STANDARD_SHARE: Final[float] = 0.7
+COUNT_FIELDS: Final[dict[str, str]] = {"banheiros": "bathrooms", "dormitorios": "beds", "vagas": "garages"}
 NAME_NOISE: Final[re.Pattern[str]] = re.compile(r"\b(condominio|residencial|residence|club|edificio|edif|ed|cond|torre|bloco|predio|de|do|da|dos|das|e|\d+)\b\.?")
 STREET_NOISE: Final[re.Pattern[str]] = re.compile(r"\b(rua|r|avenida|av|travessa|tv|estrada|alameda|al|rodovia|rs|br|de|do|da|dos|das)\b\.?")
 SPECIALIST_SKILL: Final[str] = "cadastrar-imovel-no-kenlo"
@@ -184,6 +185,25 @@ def find_place(street: str, number: str, city: str, condominium: str) -> dict[st
             "cep": _usual(found, "cep"), "andares": floors[0][0] if steady else "", "imoveis": len(found)}
 
 
+def usual_count(kind: str, condominium: str, street: str, number: str, city: str, field: str) -> dict[str, Any]:
+    """Quantidade mais comum em imoveis do mesmo tipo no mesmo predio ou condominio."""
+    key = COUNT_FIELDS.get(field)
+    empty = {"valor": "", "iguais": 0, "imoveis": 0}
+    if not key:
+        return empty
+    values = []
+    for record in load_all():
+        place = _address(record)
+        inside = bool(condominium and place["condominio"]) and _alike(condominium, place["condominio"], NAME_NOISE)
+        door = bool(number) and place["numero"] == number and _alike(street, place["rua"], STREET_NOISE) and (not city or _plain(city) == _plain(place["cidade"]))
+        if record.get("tipo") == kind and (inside or door) and record.get("lista", {}).get(key):
+            values.append(str(record["lista"][key]))
+    if not values:
+        return empty
+    value, same = Counter(values).most_common(1)[0]
+    return {"valor": value, "iguais": same, "imoveis": len(values)} if same >= STANDARD_SHARE * len(values) else empty
+
+
 def web_place(street: str, number: str, city: str, chat: Any, search: Any) -> str:
     """Ultimo recurso: procura so o endereco na internet, sem nenhum dado do proprietario."""
     try:
@@ -248,8 +268,10 @@ def knowledge_chunks(records: list[dict[str, Any]], today: str) -> list[str]:
                 beds.setdefault(str(item.get("lista", {}).get("beds") or "?"), []).append(price)
         fees = "; ".join(f"{bed} dormitórios: condomínio mais comum {_money(Counter(values).most_common(1)[0][0])} ({len(values)} imóveis)" for bed, values in sorted(beds.items()))
         common = _common(items, 0.6)
+        rooms = Counter((str(item.get("tipo")), str(item.get("lista", {}).get("bathrooms"))) for item in items if item.get("lista", {}).get("bathrooms"))
+        baths = "; ".join(f"{kind}: {amount} banheiro(s) em {total} imóveis" for (kind, amount), total in sorted(rooms.items()))
         lines = [f"Condomínio {name}, bairro {info.get('location_neighborhood') or ''}, {info.get('location_city') or ''}: {len(items)} imóveis lidos em {today}.",
-                 fees, _prices(items, "municipal_property_tax", "IPTU"), f"Itens comuns: {_boxes(common)}."]
+                 fees, baths, _prices(items, "municipal_property_tax", "IPTU"), f"Itens comuns: {_boxes(common)}."]
         pieces.append(" ".join(line for line in lines if line))
     for name, items in sorted(places.items()):
         lines = [f"Imóveis {name}: {len(items)} lidos em {today}.", _prices(items, "sale_price", "Venda"), _prices(items, "rent_price", "Locação"), _prices(items, "municipal_property_tax", "IPTU")]

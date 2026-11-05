@@ -11,6 +11,7 @@ import re
 from datetime import date
 from typing import Any, Final
 
+from dodaios.core import kenlo_learning as learning
 from dodaios.core.photo_order import FLOORS, VISIBLE_ITEMS
 from dodaios.core.property_sheet import _fold
 
@@ -19,6 +20,7 @@ KIND_LABELS: Final[dict[str, tuple[str, str]]] = {
     "pavilhao": ("Comercial", "Pavilhão"), "apartamento": ("Residencial", "Apartamento"), "casa": ("Residencial", "Casa"),
     "sala": ("Comercial", "Sala"), "loja": ("Comercial", "Loja"), "predio": ("Comercial", "Prédio"), "terreno": ("Comercial", "Terreno"),
 }
+ROOM_KINDS: Final[tuple[str, ...]] = ("casa", "apartamento")
 USEFUL_AREA: Final[tuple[str, ...]] = ("sala", "loja", "predio")
 INTERCOM: Final[tuple[str, ...]] = ("sala", "predio")
 REQUIRED_COUNTS: Final[dict[str, tuple[str, ...]]] = {"casa": ("dormitorios", "banheiros"), "apartamento": ("dormitorios", "banheiros"), "sala": ("banheiros",), "loja": ("banheiros",), "predio": ("banheiros",)}
@@ -108,7 +110,8 @@ def floor_steps(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, An
         check.append(f"Piso identificado pelas fotos: {', '.join(seen)}. Confira.")
     condo = condo_rules(sheet, rules)
     fallback = rules["piso"] if item.get("tipo") == "pavilhao" else rules.get("apartamento", {}).get("piso", []) if item.get("tipo") == "apartamento" else []
-    names = sheet.get("pisos") or seen or condo.get("piso") or fallback
+    # Cada piso da ficha ou das fotos e marcado: o imovel pode ter mais de um.
+    names = list(dict.fromkeys([*sheet.get("pisos", []), *seen])) or condo.get("piso") or fallback
     if not names:
         return [_step(section, "Piso", "perguntar_piso", list(FLOORS))]
     return [_step(section, name, "marcar", True) for name in names]
@@ -125,7 +128,7 @@ def compare_with_photos(sheet: dict[str, Any], details: dict[str, Any]) -> list[
     return differences
 
 
-def fill_counts(sheet: dict[str, Any], details: dict[str, Any], check: list[str]) -> dict[str, Any]:
+def fill_counts(sheet: dict[str, Any], details: dict[str, Any], check: list[str], item_kind: str = "") -> dict[str, Any]:
     """A ficha nao informou: usa a quantidade vista nas fotos e pede conferencia."""
     filled = {**sheet}
     for field, name in COUNTED:
@@ -133,6 +136,19 @@ def fill_counts(sheet: dict[str, Any], details: dict[str, Any], check: list[str]
         if seen and not sheet.get(field):
             filled[field] = str(seen)
             check.append(f"{name.capitalize()}: {seen}, pelas fotos. Confira.")
+    return apply_room_rules(item_kind, filled, check)
+
+
+def apply_room_rules(kind: str, sheet: dict[str, Any], check: list[str]) -> dict[str, Any]:
+    """Sem suite, vale zero; cada suite tem banheiro, entao ha pelo menos um por suite."""
+    if kind not in ROOM_KINDS:
+        return sheet
+    filled = {**sheet, "suites": sheet.get("suites") or "0"}
+    suites = int(re.sub(r"\D", "", filled["suites"]) or 0)
+    baths = int(re.sub(r"\D", "", str(filled.get("banheiros") or "")) or 0)
+    if suites > baths:
+        filled["banheiros"] = str(suites)
+        check.append(f"Banheiros ajustados para {suites}: cada suíte tem pelo menos um.")
     return filled
 
 
@@ -149,7 +165,7 @@ def written_items(item: dict[str, Any], sheet: dict[str, Any]) -> list[str]:
 
 def seen_items(sheet: dict[str, Any], check: list[str]) -> list[dict[str, Any]]:
     """Itens vistos nas fotos: marca se o campo existir e pede conferencia."""
-    items = list(dict.fromkeys([*sheet.get("itens_ficha", []), *sheet.get("itens_fotos", [])]))
+    items = list(dict.fromkeys([*sheet.get("itens_ficha", []), *sheet.get("itens_fotos", []), *sheet.get("itens_condominio", [])]))
     if items:
         check.append(f"Marcado pela ficha e pelas fotos: {', '.join(items)}. Confira.")
     return [{**_step("Detalhes", name, "marcar", True), "opcional": True} for name in items]
@@ -176,6 +192,7 @@ def _complement(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, An
 def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any], ad_text: str, today: date | None = None) -> dict[str, Any]:
     """Campos em ordem de tela e a lista do que o dono precisa conferir."""
     today = today or date.today()
+    rules = learning.rules_for(rules, item.get("tipo", ""), sheet.get("sugestoes", {}).get("campos"))
     sheet = complete_sheet(item, sheet, rules)
     fixed = rules["fixos"]
     minimum = fixed["valor_minimo"]
@@ -258,7 +275,7 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
         steps.append(_step(section, "Nº de andares", "texto", sheet["andares"] or fixed.get("andares_padrao", "1")))
         steps += _parking(sheet, rules)
         if item.get("tipo") == "casa":
-            steps += [_step(section, "*Dormitórios", "texto", sheet["dormitorios"]), *_optional([_step(section, "Suites", "lista", sheet["suites"])])]
+            steps += [_step(section, "*Dormitórios", "texto", sheet["dormitorios"]), _step(section, "Suites", "lista", sheet["suites"] or "0")]
         if sheet["banheiros"]:
             steps.append(_step(section, "Nº de banheiros", "texto", sheet["banheiros"]))
     steps += seen_items(sheet, check) + floor_steps(item, sheet, rules, check)

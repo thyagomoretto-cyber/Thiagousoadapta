@@ -40,6 +40,8 @@ STILL_ROUNDS = 3
 WHEEL_PIXELS = 500
 WHEEL_WAIT_MS = 900
 VIEWER_WAIT_MS = 1_500
+VIEWER_STEP_MS = 500
+PHOTO_WAIT_S = 10
 
 # O WhatsApp muda a estrutura da pagina: sem o seletor de texto, usa o texto visivel.
 READ_MESSAGES_JS = """() => {
@@ -208,6 +210,29 @@ def reveal(page, message_id: str) -> None:
             wheel(page, distance)
 
 
+def viewer_place(page) -> tuple[int, int]:
+    """Posicao da foto aberta, como em "3 de 8"; zero se a tela nao mostrar."""
+    found = re.search(r"\b(\d+) de (\d+)\b", page.evaluate("() => document.body.innerText"))
+    return (int(found.group(1)), int(found.group(2))) if found else (0, 0)
+
+
+def wait_place(page, wanted: int) -> None:
+    limit = time.monotonic() + PHOTO_WAIT_S
+    while time.monotonic() < limit and viewer_place(page)[0] > wanted:
+        page.wait_for_timeout(200)
+
+
+def next_photo(page, seen: set[str]) -> dict | None:
+    """Espera a foto seguinte carregar em vez de achar que o album acabou."""
+    limit = time.monotonic() + PHOTO_WAIT_S
+    while time.monotonic() < limit:
+        photo = page.evaluate(SAVE_LARGEST_JS)
+        if photo and photo["src"] not in seen:
+            return photo
+        page.wait_for_timeout(400)
+    return None
+
+
 def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
     """Abre a primeira foto e percorre o visualizador para pegar o tamanho real."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -218,20 +243,26 @@ def save_photos(page, message_id: str, count: int, folder: Path) -> list[str]:
         return saved
     image.click()
     page.wait_for_timeout(VIEWER_WAIT_MS)
-    # O visualizador mostra "1 de 7": e o total exato deste album.
-    counter = re.search(r"\b\d+ de (\d+)\b", page.evaluate("() => document.body.innerText"))
-    count = int(counter.group(1)) if counter else count
+    # O visualizador mostra "3 de 8": pode abrir no meio do album, entao volta ao comeco.
+    place, total = viewer_place(page)
+    for _ in range(max(place - 1, 0)):
+        page.keyboard.press("ArrowLeft")
+        wait_place(page, viewer_place(page)[0] - 1)
+    count = total or count
     seen: set[str] = set()
     for number in range(count):
-        photo = page.evaluate(SAVE_LARGEST_JS)
-        if not photo or photo["src"] in seen:
+        photo = next_photo(page, seen)
+        if not photo:
             break
         seen.add(photo["src"])
         path = folder / f"{number + 1:02d}.{'png' if 'png' in photo['type'] else 'jpg'}"
         path.write_bytes(base64.b64decode(photo["data"]))
         saved.append(str(path))
-        page.keyboard.press("ArrowRight")
-        page.wait_for_timeout(VIEWER_WAIT_MS)
+        if number + 1 < count:
+            page.keyboard.press("ArrowRight")
+            page.wait_for_timeout(VIEWER_STEP_MS)
+    if len(saved) != count:
+        print(f"WHATSAPP_FOTOS_INCOMPLETAS={len(saved)} de {count}", flush=True)
     page.keyboard.press("Escape")
     page.wait_for_timeout(500)
     return saved

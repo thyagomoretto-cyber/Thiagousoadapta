@@ -18,6 +18,7 @@ from dodaios.core import photo_order as order
 VISION_TIMEOUT_S: Final[float] = 240.0
 AD_TIMEOUT_S: Final[float] = 120.0
 CONNECT_TIMEOUT_S: Final[float] = 5.0
+SCREEN_TIMEOUT_S: Final[float] = 90.0
 DETAIL_PHOTOS: Final[int] = 10
 DETAIL_CONFIDENCE: Final[float] = 0.7
 OUTDOOR_SKY: Final[float] = 0.2
@@ -155,6 +156,7 @@ def detect_details(paths: list[Path]) -> dict[str, list[str]]:
               '{"piso": [{"nome": "...", "confianca": 0.0}], "itens": [{"nome": "...", "confianca": 0.0}], "contagens": {"dormitorios": 0, "suites": 0, "vagas": 0, "banheiros": 0}}. '
               f"Nomes de piso permitidos: {', '.join(order.FLOORS)}. Nomes de itens permitidos: {', '.join(order.VISIBLE_ITEMS)}. "
               "Em contagens, conte so ambientes diferentes que aparecem nas fotos, sem repetir o mesmo ambiente; sem certeza, use 0. "
+              "Veja o piso de cada ambiente: um imovel pode ter mais de um, como porcelanato na sala e vinilico nos quartos; liste todos. "
               "Liste so o que aparece claramente nas fotos. Se nao tiver certeza, baixe a confianca. Nao invente.")
     images = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_small_jpeg(path)}"}} for path in paths[:DETAIL_PHOTOS]]
     try:
@@ -165,6 +167,19 @@ def detect_details(paths: list[Path]) -> dict[str, list[str]]:
     sure = lambda items, allowed: [str(item["nome"]) for item in items if isinstance(item, dict) and item.get("nome") in allowed and float(item.get("confianca", 0)) >= DETAIL_CONFIDENCE]
     counts = found.get("contagens") if isinstance(found.get("contagens"), dict) else {}
     return {"piso": sure(found.get("piso", []), order.FLOORS), "itens": sure(found.get("itens", []), order.VISIBLE_ITEMS), "contagens": counts}
+
+
+def screen_help(picture: bytes, field: str, problem: str) -> dict[str, str]:
+    """Olha a tela travada e diz o que tentar uma vez; vazio se nao houver saida clara."""
+    prompt = (f"Esta e a tela de um sistema imobiliario. O agente nao conseguiu preencher o campo '{field}'. Problema: {problem}. "
+              'Responda so um JSON: {"acao": "clicar", "texto": "texto visivel exato do botao ou aba"} se um clique resolver, '
+              '{"acao": "esperar"} se a tela ainda estiver carregando, ou {"acao": "nenhuma"} se nao souber. Nunca sugira salvar, publicar, excluir ou enviar.')
+    image = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(picture).decode()}"}}
+    try:
+        found = json.loads(re.search(r"\{.*\}", _chat([{"type": "text", "text": prompt}, image], SCREEN_TIMEOUT_S, THINKING_TOKENS), re.DOTALL).group(0))
+    except Exception:
+        return {"acao": "nenhuma", "texto": ""}
+    return {"acao": str(found.get("acao", "nenhuma")), "texto": str(found.get("texto", ""))}
 
 
 def write_ad(prompt: str) -> str:

@@ -10,7 +10,7 @@ import unicodedata
 from typing import Any, Final
 
 _MONEY: Final[str] = r"(\d{1,3}(?:\.\d{3})+(?:,\d{2})?|\d+(?:,\d{2})?)"
-_PHONE = re.compile(r"\(?\b(\d{2})\)?\s*(\d{4,5})[-\s]?(\d{4})\b")
+_PHONE = re.compile(r"\(?\b(\d{2})\)?\s*(\d{4,5})[-‐-―\s]?(\d{4})\b")
 _STREET = re.compile(r"\b(avenida|av\.?|rua|r\.|estrada|rodovia|rod\.?|travessa|alameda)\s", re.IGNORECASE)
 _NUMBER = re.compile(r"^(.*?)[,\s]+(?:n[ºo°.]*\s*)?(\d{1,6})\b", re.IGNORECASE)
 _BULLET = re.compile(r"^[\s•·*\-–—▪️✅]+")
@@ -25,7 +25,7 @@ _COUNTS: Final[dict[str, str]] = {
 }
 
 
-_FLOORS: Final[dict[str, str]] = {"Porcelanato": "porcelanato", "Cerâmica": "ceramica", "Laminado": "laminado", "Vinílico": "vinilico", "Mármore": "marmore", "Granito": "granito",
+_FLOORS: Final[dict[str, str]] = {"Porcelanato": "porcelanato", "Cerâmica": "ceramica", "Laminado": "laminado", "Vinílico": "vinilico", "Mármore": "marmore", "Bloquete": "bloquete", "Ardósia": "ardosia", "Contrapiso": "contrapiso", "Tábua": "tabua", "Granito": "granito",
                                   "Carpete": "carpete", "Cimento queimado": "cimento queimado", "Taco de madeira": "taco", "Piso frio": "piso frio"}
 
 
@@ -125,7 +125,8 @@ def parse_sheet(text: str) -> dict[str, Any]:
     open_air = re.search(r"\b(\d{1,3})\s+vagas?\s+descobertas?\b", folded)
     counts = {}
     for field, pattern in _COUNTS.items():
-        found = re.search(rf"\b(\d{{1,3}})\s+{pattern}\b", folded)
+        # A ficha escreve "Qnt suites: 1" ou "1 suite".
+        found = re.search(rf"\b(?:qnt|qtd|quantidade)\b[ .]*(?:de\s+)?{pattern}\s*:?\s*(\d{{1,3}})\b", folded) or re.search(rf"\b(\d{{1,3}})\s+{pattern}\b", folded)
         counts[field] = found.group(1) if found else ""
     return {
         "codigo": code.group(1) if code else "",

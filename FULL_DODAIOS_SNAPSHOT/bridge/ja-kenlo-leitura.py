@@ -36,6 +36,7 @@ LIST_RETRY_S = 25
 RESPONSE_TIMEOUT_MS = 30_000
 READ_PAUSE_MS = int(os.environ.get("JA_KENLO_PAUSA") or 400)
 MAX_PAGES = 200
+ALL_LIMIT = 100_000
 WATCH_LIMIT = 300
 DIAGNOSIS = Path.home() / ".dodaios-data/data/imoveis/diagnostico"
 KEEP = ("property_abbreviation_reference", "usage", "usage_type", "status", "beds", "bathrooms", "garages", "location_neighborhood", "location_city", "enterprise", "sale_price", "rent_price", "condo_price",
@@ -234,9 +235,9 @@ def fetch_list(page, purpose: str, goal: str) -> tuple[int, list[dict]]:
     return total, hits
 
 
-def choose(hits: list[dict], per_type: int, study) -> tuple[list[dict], dict]:
-    """So os ativos, ate o limite de cada tipo; a Moretto vem primeiro."""
-    active = [item for item in hits if str(item.get("status", "")).strip().lower() == ACTIVE]
+def choose(hits: list[dict], per_type: int, study, everything: bool = False) -> tuple[list[dict], dict]:
+    """Ativos ate o limite de cada tipo, a Moretto primeiro; com --todos, a lista inteira."""
+    active = hits if everything else [item for item in hits if str(item.get("status", "")).strip().lower() == ACTIVE]
     groups: dict[str, list[dict]] = {}
     for item in active:
         groups.setdefault(study.kind_of(f"- {item.get('usage_type', '')}"), []).append(item)
@@ -296,7 +297,7 @@ def read_batch(page, chosen: list[dict], purpose: str, goal: str, failed: list[s
     return True
 
 
-def run(per_type: int) -> int:
+def run(per_type: int, everything: bool = False) -> int:
     from playwright.sync_api import sync_playwright
 
     from dodaios.core import agent_questions as questions, kenlo_study as study
@@ -334,7 +335,7 @@ def run(per_type: int) -> int:
                         raise
 
                 total, hits = questions.with_owner(f"buscar {purpose} em {goal}", get_list, lambda: tools.demonstrate(listing, f"deixe a busca aberta nesta janela e clique em Pronto. Depois tento {purpose} em {goal} de novo."))
-                chosen, found = choose(hits, per_type, study)
+                chosen, found = choose(hits, per_type, study, everything)
                 shape.append({"finalidade": purpose, "objetivo": goal, "total": total, **found})
                 print("LEITURA_LISTA=" + json.dumps(shape[-1], ensure_ascii=False), flush=True)
                 going = read_batch(listing, chosen, purpose, goal, failed, questions, study)
@@ -353,4 +354,6 @@ def run(per_type: int) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--por-tipo", type=int, default=100)
-    sys.exit(run(parser.parse_args().por_tipo))
+    parser.add_argument("--todos", action="store_true")
+    options = parser.parse_args()
+    sys.exit(run(ALL_LIMIT if options.todos else options.por_tipo, options.todos))

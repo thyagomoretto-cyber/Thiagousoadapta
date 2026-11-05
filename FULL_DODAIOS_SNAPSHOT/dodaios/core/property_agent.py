@@ -120,7 +120,7 @@ def reading_message() -> str:
     return f"Li {info['lidos']} cadastros do Kenlo: {info['por_tipo']}. Falhas: {info['falhas']}. Relatório em Downloads: {info['relatorio']}."
 
 
-def read_kenlo(on_finish: Callable[[str], None], per_type: int = 100) -> None:
+def read_kenlo(on_finish: Callable[[str], None], per_type: int = 100, everything: bool = False) -> None:
     """Le cadastros prontos do Kenlo para aprender. Nunca altera nada la."""
     global _process, _watcher
     with _LOCK:
@@ -130,7 +130,7 @@ def read_kenlo(on_finish: Callable[[str], None], per_type: int = 100) -> None:
         path = _log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("wb") as output:
-            _process = subprocess.Popen([sys.executable, str(script), "--por-tipo", str(per_type)], cwd=str(script.parents[1]), stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            _process = subprocess.Popen([sys.executable, str(script), "--por-tipo", str(per_type), *(["--todos"] if everything else [])], cwd=str(script.parents[1]), stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         process = _process
 
     def wait() -> None:
@@ -175,10 +175,15 @@ def _summary() -> str:
     return "\n".join(lines)
 
 
+def is_start(text: str) -> bool:
+    """Ordem de cadastrar: e tarefa do agente, nunca pesquisa."""
+    return bool(_START.search(_fold(text))) and "?" not in text
+
+
 def answer_property_request(text: str) -> str | None:
     """Pedido direto no chat. Devolve None quando a frase nao e para o especialista."""
     plain = _fold(text)
-    if _START.search(plain) and "?" not in text:
+    if is_start(text):
         save = can_save()
         try:
             start(save)

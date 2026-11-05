@@ -186,7 +186,7 @@ def retry_stopped() -> int:
     """Um pedido novo do dono volta a tentar o que parou por falha ou por fotos."""
     with _LOCK:
         ledger = _load()
-        stopped = [item for item in ledger.values() if item["status"] == REVIEW and re.match(r"(falhou em|fotos em duvida|modelo de imagens|ficha diferente)", _fold(item.get("nota", "")))]
+        stopped = [item for item in ledger.values() if item["status"] == REVIEW and not item.get("duvidas") and item.get("nota") and not _fold(item["nota"]).startswith("conferir")]
         for item in stopped:
             item["status"] = PENDING
         if stopped:

@@ -567,6 +567,13 @@ def new_company_task(company_id: str, body: CompanyTaskBody) -> dict:
     """Passa a tarefa pelos gerentes; imoveis usam o agente, o resto vira missao."""
     from dodaios.core import property_agent
 
+    if property_agent.is_start(body.texto):
+        route = {"rota": ["Gerente Geral", "Especialista de cadastro"], "agente": True, "iniciado": True}
+        try:
+            _run_agent(company_id, route["rota"])
+        except RuntimeError as exc:
+            route.update(iniciado=False, aviso=str(exc))
+        return route
     topic = org.wants_specialist(body.texto)
     if topic:
         sector = next((item.departmentId for item in _organized(company_id)[1].members if item.id == body.membro), "")
@@ -680,8 +687,9 @@ def talk_to_company(company_id: str, body: ChatMessage) -> dict:
 
         route = ["Gerente Geral", "Especialista de cadastro"]
         try:
-            property_agent.read_kenlo(lambda text: chat.add(company_id, "empresa", text, rota=route))
-            chat.add(company_id, "empresa", "Vou ler até 100 imóveis ativos de cada tipo, em venda e em locação, só olhando, sem alterar nada. Conto aqui quando terminar.", rota=route)
+            everything = bool(re.search(r"\btodos\b", org.fold(body.texto)))
+            property_agent.read_kenlo(lambda text: chat.add(company_id, "empresa", text, rota=route), everything=everything)
+            chat.add(company_id, "empresa", "Vou ler todos os imóveis, ativos e inativos, em venda e em locação, só olhando, sem alterar nada. Pode levar mais de uma hora." if everything else "Vou ler até 100 imóveis ativos de cada tipo, em venda e em locação, só olhando, sem alterar nada. Pode levar um tempo.", rota=route)
         except RuntimeError as exc:
             chat.add(company_id, "empresa", f"{exc}. Tente de novo em seguida.", rota=route)
         return {"ok": True}

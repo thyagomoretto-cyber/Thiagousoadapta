@@ -15,9 +15,17 @@ Todo ensinamento novo do DodaiOS entra numa pasta como esta, junto com o que foi
 - Tipo de locação Mensal em locação; em venda não mexer.
 - Sala, loja e prédio usam área útil, total e privativa. Sala e prédio marcam Interfone.
 - Dormitórios, suítes, vagas e banheiros: conferir ficha e fotos e perguntar se não houver.
+- Casa e apartamento sempre têm dormitórios e suítes preenchidos; sem suíte, vale 0.
+- Banheiros: ver nas fotos e nunca colocar menos que o número de suítes.
+- Piso: marcar todos os que aparecem na ficha ou nas fotos.
 - Itens identificados na ficha ou nas fotos são marcados; os outros ficam em branco.
 - Finalidade e Tipo ficam travados enquanto carregam: esperar e conferir antes de seguir.
 - Sem o modelo de imagens, perguntar antes e nunca salvar.
+- IPTU sempre Mensal: com valor na ficha, usar o valor; sem valor, 0,01.
+- Sem valor de condomínio na ficha: usar o valor mais comum dos imóveis lidos do mesmo condomínio, com os mesmos dormitórios.
+- Consultar imóveis parecidos na base lida, marcando para conferir.
+- Comparar o cadastro final com o que foi preenchido e perguntar antes de virar regra.
+- Antes de perguntar ao dono, olhar a tela e tentar resolver uma vez.
 
 ## O que não fica aqui
 

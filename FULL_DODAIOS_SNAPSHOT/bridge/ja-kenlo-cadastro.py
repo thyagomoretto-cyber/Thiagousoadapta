@@ -14,6 +14,7 @@ Sem login guardado, o dono entra na janela. Se um campo falhar, nada e salvo.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -31,6 +32,7 @@ URL = os.environ.get("JA_KENLO_URL") or ""
 LOGIN_HOST = "signin.valuegaia"
 SELECT_WAIT_S = 30
 SAVE_WAIT_MS = 60_000
+ALONE_WAIT_MS = 5_000
 VISION_TRIES = 6
 LOAD_TIMEOUT_MS = int(os.environ.get("JA_KENLO_CARGA_MS") or 30_000)
 KEYCHAIN_ITEM = "ja-kenlo"
@@ -108,6 +110,17 @@ SELECT_STATE_JS = r"""
   const chosen = node.selectedOptions[0] ? fold(node.selectedOptions[0].text) : '';
   const target = fold(wanted);
   return { travado: node.disabled, pronto: texts.some((text) => text === target || text.startsWith(target)), certo: chosen === target || chosen.startsWith(target) };
+}
+"""
+SAVE_WARNING_JS = r"""
+() => {
+  const shown = [...document.querySelectorAll('.modal, .alert, .swal2-popup, .toast, .error, .erro, .has-error, .help-block, [role=alert], [class*=erro], [class*=invalid]')]
+    .filter((node) => node.getClientRects().length).map((node) => (node.innerText || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 6);
+  const focused = document.activeElement;
+  const box = focused && focused.closest('div, td, li');
+  const label = box && box.querySelector('label');
+  if (label) shown.push(`campo em destaque: ${label.innerText.trim()}`);
+  return shown.join(' | ').slice(0, 400);
 }
 """
 SAVE_JS = r"""
@@ -437,6 +450,27 @@ class Form:
         if decision["acao"] != "pular":
             self._do(step, photos)
 
+    def _try_alone(self, step: dict, problem: str, photos: list[str]) -> bool:
+        """Antes de perguntar, olha a tela e tenta uma vez o que parecer resolver."""
+        from dodaios.core import agent_questions as questions, photo_vision as vision
+
+        field = step["campo"]
+        try:
+            hint = vision.screen_help(self.page.screenshot(type="jpeg", quality=70), field.strip("*:"), problem)
+            if hint["acao"] == "esperar":
+                self.page.wait_for_timeout(ALONE_WAIT_MS)
+            elif hint["acao"] == "clicar" and hint["texto"] and not questions.forbidden_click(hint["texto"]):
+                self.page.get_by_text(hint["texto"], exact=False).locator("visible=true").first.click(timeout=3000)
+                self.page.wait_for_timeout(1200)
+            else:
+                return False
+            self._do(step, photos)
+            self.log.append(f"RESOLVEU SOZINHO {field}: {hint['acao']} {hint['texto'][:40]}")
+            return True
+        except Exception as exc:
+            self.log.append(f"TENTOU SOZINHO {field}: {plain_problem(exc)}")
+            return False
+
     def _resolve(self, step: dict, problem: str, photos: list[str]) -> bool:
         """Pergunta ao dono como seguir; o que ele confirmar vale para as proximas."""
         from dodaios.core import agent_questions as questions
@@ -451,6 +485,8 @@ class Form:
                 return True
             except Exception:
                 pass
+        if self._try_alone(step, problem, photos):
+            return True
         popup = self.page.evaluate(POPUP_JS)
         text = f"estou com um problema no campo {field.strip('*:')}. {problem}.{f' Apareceu na tela: {popup}.' if popup else ''} O que eu devo fazer?"
         for _ in range(MAX_QUESTIONS):
@@ -616,6 +652,7 @@ def ask_counts(item: dict, sheet: dict, notes: list[str]) -> dict:
 
 def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     """Ficha, sequencia de fotos, anuncio e plano do imovel."""
+    from dodaios.core import kenlo_study as study
     from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision, property_intake as intake
     from dodaios.core.property_sheet import parse_sheet
 
@@ -635,8 +672,16 @@ def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
         notes += [f"{Path(photo['caminho']).name}: {photo['ambiente']} ({photo['fonte']})" for photo in arranged["ordem"]]
         intake.update(item["chave"], analise_fotos={"fotos": len(final), "duvidas": doubts, "avisos": arranged["avisos"], "repetidas": len(arranged["repetidas"]), "faltando": arranged["faltando"], "problemas": vision.problems[-3:]})
     details = vision.detect_details([Path(path) for path in final])
-    sheet = plan.fill_counts({**sheet, "pisos_fotos": details["piso"], "itens_fotos": details["itens"], "itens_ficha": plan.written_items(item, sheet)}, details, notes)
-    sheet = ask_counts(item, sheet, notes)
+    similar = study.suggest(item.get("tipo", ""), plan.KIND_LABELS.get(item.get("tipo", ""), ("", ""))[0] if item.get("finalidade") != "residencial" else "Residencial", sheet.get("bairro", ""), sheet.get("condominio_nome", ""), order.VISIBLE_ITEMS)
+    if similar["fonte"]:
+        notes.append(f"Consultei {similar['fonte']}: {', '.join(similar['campos']) or 'sem campo a sugerir'}. Confira.")
+    sheet = plan.fill_counts({**sheet, "sugestoes": similar, "itens_condominio": similar["marcados"], "pisos_fotos": details["piso"], "itens_fotos": details["itens"], "itens_ficha": plan.written_items(item, sheet)}, details, notes, item.get("tipo", ""))
+    sheet = plan.apply_room_rules(item.get("tipo", ""), ask_counts(item, sheet, notes), notes)
+    if sheet.get("condominio_nome") and not sheet.get("condominio_valor"):
+        fee = study.condominium_fee(sheet["condominio_nome"], sheet.get("dormitorios"))
+        if fee["valor"]:
+            sheet = {**sheet, "condominio_valor": fee["valor"]}
+            notes.append(f"Condomínio R$ {fee['valor']}, de {fee['imoveis']} imóveis lidos com {sheet.get('dormitorios')} dormitórios. Confira.")
     text = plan.clean_ad(vision.write_ad(plan.ad_prompt(item, sheet, rules)), sheet) or plan.template_ad(item, sheet, rules["nome_empresa"], rules)
     built = plan.build_plan(item, sheet, rules, text)
     built["conferir"] += notes + vision.problems
@@ -686,9 +731,57 @@ def owner_accepts(key: str, differences: list[str]) -> bool:
     return bool(reply) and questions.interpret(reply)["acao"] not in ("parar", "nao")
 
 
+def final_record(page, item: dict) -> dict | None:
+    """Acha no Kenlo o cadastro finalizado, pela rua e pelo numero, e le sem alterar."""
+    from dodaios.core.property_sheet import parse_sheet
+
+    spec = importlib.util.spec_from_file_location("ja_kenlo_leitura", Path(__file__).resolve().parent / "ja-kenlo-leitura.py")
+    reading = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reading)
+    sheet = parse_sheet(item.get("texto", ""))
+    if not sheet["logradouro"] or not sheet["numero"]:
+        return None
+    reading.open_list(page, sys.modules[__name__])
+    frame = reading.list_frame(page)
+    frame.get_by_text(re.compile("limpar filtros", re.IGNORECASE)).locator("visible=true").first.click(timeout=5000)
+    page.wait_for_timeout(800)
+    frame.get_by_placeholder(re.compile("Jos[eé] de Souza", re.IGNORECASE)).fill(re.sub(r"^\w+\.?\s+", "", sheet["logradouro"]))
+    with page.expect_response(reading.is_list_answer, timeout=reading.RESPONSE_TIMEOUT_MS) as waited:
+        reading.search_button(page).click()
+    hits = waited.value.json().get("hits", [])
+    found = next((hit for hit in hits if str(hit.get("location_street_number", "")).strip() == sheet["numero"]), None)
+    return reading.read_one(page, found) if found else None
+
+
+def learn_from_finished(page) -> None:
+    """Compara os cadastros finalizados e pergunta antes de mudar qualquer regra."""
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan, property_intake as intake
+
+    rules = plan.load_rules()
+    for item in learning.waiting(intake.all_items(), int(rules.get("codigo_inicial", 0)), intake.code_of):
+        key = item["chave"]
+        try:
+            final = final_record(page, item)
+        except Exception as exc:
+            print(f"AVISO=comparacao de {key}: {str(exc).splitlines()[0][:120]}", flush=True)
+            final = None
+        if not final:
+            intake.update(key, tentativas=int(item.get("tentativas", 0)) + 1)
+            continue
+        changes = learning.differences(item["preenchido"], rules, final["campos"])
+        print(f"APRENDIZADO={key} diferencas={len(changes)}", flush=True)
+        for change in changes:
+            name = change["campo"].strip("*: ")
+            reply = questions.ask_owner(f"no {key} eu coloquei {change['agente']} em {name} e no Kenlo está {change['kenlo']}. Faço sempre assim em {item.get('tipo', 'imóvel')}?", ["Sim, sempre", "Só neste imóvel"])
+            if learning.answer_is_yes(reply):
+                rules = learning.remember(plan.load_rules(), item.get("tipo", ""), change["campo"], change["kenlo"])
+                plan.rules_path().write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+        intake.update(key, comparado=True)
+
+
 def fill(page, key: str, save: bool) -> bool:
     """Cadastra um imovel na aba do Kenlo; devolve se tudo correu bem."""
-    from dodaios.core import cadastro_plan as plan, property_intake as intake
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan, kenlo_learning as learning, property_intake as intake
 
     rules = plan.load_rules()
     item = intake.get(key)
@@ -704,13 +797,14 @@ def fill(page, key: str, save: bool) -> bool:
     built, photos = prepare(item, rules)
     if built["faltando"]:
         intake.mark(key, intake.REVIEW, "Falta na ficha: " + ", ".join(built["faltando"]))
+        questions.ask_owner(f"parei o {key}: falta {', '.join(built['faltando'])} na ficha. Corrija a ficha e peça de novo.", ["Entendi"])
         print(f"KENLO_RESULTADO=FALTANDO {key} {report(key, None, built, [], 'parado antes de preencher')}", flush=True)
         return False
     if built["divergencias"] and not owner_accepts(key, built["divergencias"]):
         intake.mark(key, intake.REVIEW, "Ficha diferente das fotos: " + "; ".join(built["divergencias"]))
         print(f"KENLO_RESULTADO=DIVERGENCIA {key} {report(key, None, built, [], 'parado: ficha diferente das fotos')}", flush=True)
         return False
-    if save and built["duvidas_fotos"]:
+    if save and built["duvidas_fotos"] and not owner_accepts(key, [f"fotos em dúvida: {', '.join(built['duvidas_fotos'])}"]):
         # O Especialista em Fotos so libera o imovel com a ordem certa.
         intake.mark(key, intake.REVIEW, f"Fotos em duvida: {len(built['duvidas_fotos'])}. Confira a ordem.")
         print(f"KENLO_RESULTADO=FOTOS_EM_DUVIDA {key} {report(key, None, built, [], 'parado: fotos em duvida')}", flush=True)
@@ -728,6 +822,7 @@ def fill(page, key: str, save: bool) -> bool:
     form = Form(page, rules.get("empresa", ""))
     page.wait_for_timeout(2500)
     form.run(built["passos"], photos)
+    intake.update(key, preenchido=learning.snapshot(built["passos"]))
     page.evaluate(SEARCH_JS)
     field_map = page.evaluate(MAP_JS)
     if form.failed:
@@ -752,8 +847,12 @@ def fill(page, key: str, save: bool) -> bool:
         page.get_by_role("button", name=YES).locator("visible=true").first.click(timeout=10_000)
         page.wait_for_timeout(1500)
     except Exception as exc:
-        intake.mark(key, intake.REVIEW, "Conferir no Kenlo: cliquei em Salvar e nao vi a confirmacao")
-        print(f"KENLO_RESULTADO=CONFERIR {key} {report(key, form, built, field_map, f'cliquei em salvar sem confirmacao: {plain_problem(exc)}')}", flush=True)
+        warning = page.evaluate(SAVE_WARNING_JS)
+        picture = REPORTS / f"kenlo-salvar-{key}.png"
+        page.screenshot(path=str(picture), full_page=False)
+        intake.mark(key, intake.REVIEW, f"Conferir no Kenlo: cliquei em Salvar e nao vi a confirmacao. {warning}"[:300])
+        print(f"KENLO_RESULTADO=CONFERIR {key} {report(key, form, built, field_map, f'cliquei em salvar sem confirmacao: {plain_problem(exc)}. Na tela: {warning}')}", flush=True)
+        questions.ask_owner(f"cliquei em Salvar no {key} e não vi a confirmação. Na tela: {warning or 'nenhum aviso'}. Veja a janela antes de fechar.", ["Entendi"])
         wait_closed(page)
         return False
     intake.mark(key, intake.DONE, f"Cadastrado no Kenlo: {reference}")
@@ -825,6 +924,10 @@ def run_all(group: str, save: bool, fallback: str) -> int:
         context = browser(playwright)
         chat = context.pages[0] if context.pages else context.new_page()
         kenlo = context.new_page()
+        try:
+            learn_from_finished(kenlo)
+        except Exception as exc:  # aprender nunca impede o cadastro
+            print(f"AVISO=aprendizado: {str(exc).splitlines()[0][:160]}", flush=True)
         questions.with_owner("abrir o grupo do WhatsApp", lambda: whatsapp.open_chat(chat, group))
         handled: set[str] = set()
         count = 0

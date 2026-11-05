@@ -47,3 +47,11 @@ Quando as fotos mostrarem móveis, marque Mobiliado e cada ambiente com mobília
 ## Campos proibidos
 
 Nunca preencher Link do YouTube.
+
+## Final do cadastro
+
+A mensagem "Imóvel cadastrado com a referência" confirma o cadastro. Não é preciso responder ao aviso: feche a guia e siga para o próximo imóvel do grupo. Sem mais imóveis, feche o Chrome.
+
+## Proprietário já cadastrado
+
+Ao digitar o telefone, responda Sim em "Utilizar dados deste cliente". A Mídia de origem vem do cadastro existente e fica travada: não mexa nela.

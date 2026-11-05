@@ -42,6 +42,7 @@ KEYCHAIN_ITEM = "ja-kenlo"
 YES = re.compile(r"^\s*sim\s*$", re.IGNORECASE)
 OWNER_WAIT_MS = 8_000
 OWNER_RECHECK_MS = 100
+OWNER_LOCKED = ("*Mídia de origem:",)
 LOGIN_WAIT_S = 300
 REVIEW_WAIT_S = int(os.environ.get("JA_KENLO_ESPERA") or 1800)
 FIELD_WAIT_MS = 15_000
@@ -273,6 +274,13 @@ class Form:
         self.text(section, field, value)
         if self._use_known_owner(OWNER_WAIT_MS):
             self.log.append("OK    Proprietario ja cadastrado: usado o contato existente")
+
+    def _continue_without_kind(self) -> None:
+        """Depois do condominio, o aviso do tipo pode aparecer atrasado e travar o resto."""
+        skip = self.page.get_by_text(re.compile(r"encontrou o tipo", re.IGNORECASE)).locator("visible=true")
+        if skip.count():
+            skip.first.click(timeout=3000)
+            self.page.wait_for_timeout(1000)
 
     def _use_known_owner(self, wait_ms: int) -> bool:
         """O aviso "Utilizar dados deste cliente" cobre a tela; a resposta e sempre Sim."""
@@ -619,6 +627,10 @@ class Form:
         for step in steps:
             section, field = step["secao"], step["campo"]
             self._use_known_owner(OWNER_RECHECK_MS)
+            self._continue_without_kind()
+            if self.known_owner and field in OWNER_LOCKED:
+                self.log.append(f"PULADO {section} > {field}: veio do proprietario cadastrado")
+                continue
             if step.get("sem_condominio") and self.condo_found:
                 self.log.append(f"PULADO {section} > {field}: veio do condominio")
                 continue
@@ -1003,11 +1015,11 @@ def fill(page, key: str, save: bool) -> bool:
     button.click()
     # Depois do clique nao repete: tentar de novo criaria um cadastro em dobro.
     try:
-        page.wait_for_selector("text=/refer[eê]ncia/i", timeout=SAVE_WAIT_MS)
-        found = re.search(r"refer[eê]ncia\s+([A-Z]{1,3}\d+)", page.content(), re.IGNORECASE)
+        # A pagina tem outro "Referencia" escondido: so vale a frase da confirmacao.
+        success = page.get_by_text(re.compile(r"cadastrado com a refer[eê]ncia", re.IGNORECASE)).locator("visible=true").first
+        success.wait_for(state="visible", timeout=SAVE_WAIT_MS)
+        found = re.search(r"refer[eê]ncia\s+([A-Z]{1,3}\d+)", success.inner_text(), re.IGNORECASE)
         reference = found.group(1) if found else ""
-        page.locator("#okConfirm").or_(page.get_by_role("button", name=YES)).locator("visible=true").first.click(timeout=10_000)
-        page.wait_for_timeout(1500)
     except Exception as exc:
         warning = page.evaluate(SAVE_WARNING_JS)
         print(f"KENLO_SALVAR_RESPOSTAS={answers[-4:]}", flush=True)
@@ -1110,6 +1122,8 @@ def run_all(group: str, save: bool, fallback: str) -> int:
                         print(f"CADASTROS_FEITOS={count}", flush=True)
                         close(context)
                         return 0
+                    kenlo.close()  # cadastro finalizado: o proximo comeca em guia nova
+                    kenlo = context.new_page()
                     key = next_key()
             if handled or not look_again(chat, last_read):
                 break

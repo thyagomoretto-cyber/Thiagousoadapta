@@ -102,8 +102,10 @@ def ask_vision(path: Path, kind: str) -> dict[str, Any] | None:
     """Pergunta ao modelo local; resposta invalida devolve None e fica em ``problems``."""
     rooms = order.vocabulary(kind)
     prompt = (f"Foto de um imovel do tipo {kind.replace('_', ' ')}. Responda so um JSON: "
-              f'{{"ambiente": "...", "confianca": 0.0, "ampla": true}}. ambiente precisa ser exatamente um destes: {", ".join(rooms)}. '
-              "ampla e true se a foto mostra o ambiente inteiro. Se nao tiver certeza, baixe a confianca. Nao invente.")
+              f'{{"ambiente": "...", "confianca": 0.0, "ampla": true, "mobiliado": false, "itens": [], "piso": ""}}. ambiente precisa ser exatamente um destes: {", ".join(rooms)}. '
+              "ampla e true se a foto mostra o ambiente inteiro. mobiliado e true se a foto mostra moveis ou armarios no ambiente. "
+              f"itens sao os que aparecem claramente, somente desta lista: {', '.join(order.VISIBLE_ITEMS)}. piso, se estiver claro, e um destes: {', '.join(order.FLOORS)}. "
+              "Se nao tiver certeza, baixe a confianca. Nao invente.")
     try:
         text = _chat([{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_small_jpeg(path)}"}}], VISION_TIMEOUT_S, THINKING_TOKENS)
     except Exception as exc:
@@ -117,7 +119,8 @@ def ask_vision(path: Path, kind: str) -> dict[str, Any] | None:
     if found.get("ambiente") not in rooms:
         problems.append(f"{path.name}: ambiente fora da lista: {str(found.get('ambiente'))[:40]}")
         return None
-    return {"ambiente": found["ambiente"], "confianca": float(found.get("confianca") or 0), "ampla": bool(found.get("ampla")), "fonte": "modelo"}
+    return {"ambiente": found["ambiente"], "confianca": float(found.get("confianca") or 0), "ampla": bool(found.get("ampla")), "fonte": "modelo", "mobiliado": found.get("mobiliado") is True,
+            "itens": [name for name in found.get("itens") or [] if name in order.VISIBLE_ITEMS], "piso": found.get("piso") if found.get("piso") in order.FLOORS else ""}
 
 
 def apple_labels(path: Path) -> list[tuple[str, float]]:
@@ -200,8 +203,8 @@ def classify_all(paths: list[Path], kind: str, company: str) -> list[dict[str, A
         known = memory["fotos"].get(mark["sha"], {})
         if mark["sha"] in memory["correcoes"]:
             found = {"ambiente": memory["correcoes"][mark["sha"]], "confianca": 1.0, "ampla": known.get("ampla", False), "fonte": "dono"}
-        elif known.get("kind") == kind and known.get("fonte") == "modelo":
-            found = {key: known[key] for key in ("ambiente", "confianca", "ampla", "fonte")}
+        elif known.get("kind") == kind and known.get("fonte") == "modelo" and "mobiliado" in known:
+            found = {key: known[key] for key in ("ambiente", "confianca", "ampla", "fonte", "mobiliado", "itens", "piso")}
         else:
             answer = None
             if model_up:

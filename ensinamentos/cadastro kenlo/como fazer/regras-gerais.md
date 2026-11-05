@@ -31,3 +31,19 @@ Todo ensinamento novo do DodaiOS entra numa pasta como esta, junto com o que foi
 
 Senhas, tokens, nomes e telefones de proprietários, corretor, registro de imóveis e dados dos cadastros lidos.
 Enquanto este repositório for público, dados da empresa ficam só no computador. Ao juntar as regras, informe o corretor em `*Corretor:`.
+
+## Quando faltar informação
+
+1. Procure primeiro nos imóveis já lidos, aceitando erro de escrita em rua e condomínio.
+2. Cadastre o endereço igual ao que já existe na base. Sem resultado pela rua, use o CEP.
+3. Apartamento sempre leva o nome do condomínio ou edifício. Sem ele na ficha, procure pelo endereço na base.
+4. Não achou na base: procure na internet só pelo endereço, nunca com dados do proprietário.
+5. Não achou na internet: pergunte ao dono.
+
+## Mobília
+
+Quando as fotos mostrarem móveis, marque Mobiliado e cada ambiente com mobília. O seletor de fotos entrega ambientes, itens e pisos para quem preenche.
+
+## Campos proibidos
+
+Nunca preencher Link do YouTube.

@@ -9,6 +9,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
+from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final
@@ -18,6 +19,12 @@ PER_TYPE: Final[int] = 100
 COMMON_SHARE: Final[float] = 0.7
 MIN_RECORDS: Final[int] = 3
 MIN_SIMILAR: Final[int] = 3
+MATCH_AVERAGE: Final[float] = 0.82
+MATCH_WORD: Final[float] = 0.6
+WEB_CONFIDENCE: Final[float] = 0.8
+STANDARD_SHARE: Final[float] = 0.7
+NAME_NOISE: Final[re.Pattern[str]] = re.compile(r"\b(condominio|residencial|residence|club|edificio|edif|ed|cond|torre|bloco|predio|de|do|da|dos|das|e|\d+)\b\.?")
+STREET_NOISE: Final[re.Pattern[str]] = re.compile(r"\b(rua|r|avenida|av|travessa|tv|estrada|alameda|al|rodovia|rs|br|de|do|da|dos|das)\b\.?")
 SPECIALIST_SKILL: Final[str] = "cadastrar-imovel-no-kenlo"
 BASE_TITLE: Final[str] = "Cadastros lidos do Kenlo"
 KNOWLEDGE_HIDDEN: Final[re.Pattern[str]] = re.compile(r"corretor|cadastro por|propriet|endere|logradouro|n[uú]mero$|complemento|cep|t[ií]tulo|descri|site|portais|tipofoto|data de|filial|ano de|valor|bairro|taxa de|buscar por|adicionar|classifica|cidade|estado|^(sim|n[aã]o|venda|loca[cç][aã]o|foto de capa|somente .*|venda/loca[cç][aã]o)$", re.IGNORECASE)
@@ -126,6 +133,68 @@ def suggest(kind: str, purpose: str, neighborhood: str, condominium: str, items:
     fields = {f"{name}:": common["campos"][name] for name in SUGGESTED_FIELDS if common["campos"].get(name) not in (None, "", "Não informado")}
     boxes = [name for name in common["marcados"] if name in items] if wanted and source.startswith("condom") else []
     return {"campos": fields, "marcados": boxes, "fonte": f"{len(close)} imóveis do {source}"}
+
+
+def _words(text: Any, noise: re.Pattern[str]) -> list[str]:
+    return re.findall(r"[a-z0-9]+", noise.sub(" ", _plain(text)))
+
+
+def _alike(wanted: Any, candidate: Any, noise: re.Pattern[str]) -> bool:
+    """Compara palavra por palavra: Passeo Citta acha Club Residencial Paseo Citta / Torre 1."""
+    words, others = _words(wanted, noise), _words(candidate, noise)
+    if not words or not others:
+        return False
+    scores = [max(SequenceMatcher(None, word, other).ratio() for other in others) for word in words]
+    return min(scores) >= MATCH_WORD and sum(scores) / len(scores) >= MATCH_AVERAGE
+
+
+def clean_condominium(text: str) -> str:
+    """A ficha pode dizer "Sim, Paseo Citta" no campo do condominio."""
+    return re.sub(r"^\s*(sim|possui|tem)\b[\s,:.-]*", "", text or "", flags=re.IGNORECASE).strip()
+
+
+def _address(record: dict[str, Any]) -> dict[str, str]:
+    fields = record.get("campos", {})
+    place = record.get("lista", {}).get("enterprise") or ""
+    name = str(place.get("name", "") if isinstance(place, dict) else place).strip()
+    return {"condominio": name if re.search(r"[A-Za-z]", name) else "", "rua": str(fields.get("Endereço") or "").strip(), "numero": str(fields.get("Número") or "").strip(),
+            "bairro": str(fields.get("Bairro") or "").strip(), "cidade": str(fields.get("Cidade") or record.get("lista", {}).get("location_city") or "").strip(),
+            "cep": re.sub(r"\D", "", str(fields.get("CEP") or "")), "andares": str(fields.get("Nº de andares") or "").strip()}
+
+
+def _usual(items: list[dict[str, str]], name: str) -> str:
+    return next((value for value, _count in Counter(item[name] for item in items if item[name]).most_common(1)), "")
+
+
+def find_place(street: str, number: str, city: str, condominium: str) -> dict[str, Any]:
+    """Procura nos imoveis lidos, aceitando erro de escrita, como o endereco foi cadastrado."""
+    places = [_address(record) for record in load_all()]
+    named = [item for item in places if condominium and item["condominio"] and _alike(condominium, item["condominio"], NAME_NOISE)]
+    road = [item for item in places if street and item["rua"] and _alike(street, item["rua"], STREET_NOISE) and (not city or _plain(city) == _plain(item["cidade"]))]
+    same_door = [item for item in road if number and item["numero"] == number]
+    found = [item for item in named if item in road] or named or same_door or road
+    if not found:
+        return {}
+    building = named or same_door
+    with_name = [item for item in building if item["condominio"]]
+    name = _usual(with_name, "condominio").split("/")[0].strip()
+    floors = Counter(item["andares"] for item in with_name if item["andares"]).most_common(1)
+    steady = bool(floors and floors[0][1] >= STANDARD_SHARE * len(with_name))
+    return {"condominio": name, "rua": _usual(found, "rua"), "numero": _usual(found, "numero") if named else "", "bairro": _usual(found, "bairro"), "cidade": _usual(found, "cidade"),
+            "cep": _usual(found, "cep"), "andares": floors[0][0] if steady else "", "imoveis": len(found)}
+
+
+def web_place(street: str, number: str, city: str, chat: Any, search: Any) -> str:
+    """Ultimo recurso: procura so o endereco na internet, sem nenhum dado do proprietario."""
+    try:
+        results = search(f'condomínio edifício "{street}" {number} {city}')
+        reply = chat("Estes sao resultados de busca sobre um endereco. Responda so um JSON "
+                     f'{{"condominio": "", "confianca": 0.0}} com o nome do condominio ou edificio em {street}, {number}, {city}. '
+                     f"Use somente os resultados. Sem certeza, deixe vazio.\n{json.dumps(results, ensure_ascii=False)[:5000]}", 60.0, 300)
+        found = json.loads(re.search(r"\{.*\}", reply, re.DOTALL).group(0))
+    except Exception:
+        return ""
+    return str(found.get("condominio") or "").strip() if float(found.get("confianca") or 0) >= WEB_CONFIDENCE else ""
 
 
 def _money(value: float) -> str:

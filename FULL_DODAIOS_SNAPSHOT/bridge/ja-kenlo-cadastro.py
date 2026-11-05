@@ -14,6 +14,7 @@ Sem login guardado, o dono entra na janela. Se um campo falhar, nada e salvo.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import json
 import os
@@ -32,6 +33,8 @@ URL = os.environ.get("JA_KENLO_URL") or ""
 LOGIN_HOST = "signin.valuegaia"
 SELECT_WAIT_S = 30
 SAVE_WAIT_MS = 60_000
+SELECT_APPEARS_S = 4
+FURNISHED_MIN = 3
 ALONE_WAIT_MS = 5_000
 VISION_TRIES = 6
 LOAD_TIMEOUT_MS = int(os.environ.get("JA_KENLO_CARGA_MS") or 30_000)
@@ -77,6 +80,19 @@ SEARCH_JS = r"""
       const kind = (node) => node.tagName.toLowerCase() + ':' + (node.type || '');
       return all.find((node) => types.includes(kind(node)) && after(label, node) && (node.tagName === 'SELECT' || visible(node))) || null;
     },
+    roomBox(name) {
+      // Cozinha aparece duas vezes: a dos moveis fica no grupo que tem Closet e Corredor.
+      const textOf = (box) => fold((box.id && document.querySelector(`label[for="${box.id}"]`)?.innerText) || box.closest('label')?.innerText || box.parentElement?.innerText || '');
+      const boxes = [...document.querySelectorAll('input[type=checkbox]')];
+      const room = boxes.find((box) => textOf(box) === 'corredor');
+      let group = room?.parentElement;
+      while (group && ![...group.querySelectorAll('input[type=checkbox]')].some((box) => textOf(box) === 'closet')) group = group.parentElement;
+      return group ? [...group.querySelectorAll('input[type=checkbox]')].find((box) => textOf(box) === fold(name)) || null : null;
+    },
+    forbidden(node) {
+      const near = (node.closest('div, td, li')?.innerText || '').slice(0, 60);
+      return /you\s*tube/i.test(`${node.name} ${node.id} ${node.placeholder || ''} ${near}`);
+    },
     checkbox(section, name) {
       const label = this.label(section, name);
       if (!label) return null;
@@ -90,6 +106,14 @@ SEARCH_JS = r"""
 }
 """
 TEXT_TYPES = ["input:text", "input:tel", "input:number", "input:email", "input:search", "input:", "textarea:textarea"]
+CLEAR_FORBIDDEN_JS = r"""
+() => [...document.querySelectorAll('input, textarea')].filter((node) => node.value && !/checkbox|radio|hidden/.test(node.type) && window.__ja.forbidden(node)).map((node) => {
+  node.value = '';
+  node.dispatchEvent(new Event('input', { bubbles: true }));
+  node.dispatchEvent(new Event('change', { bubbles: true }));
+  return node.name || node.id;
+})
+"""
 SET_SELECT_JS = r"""
 ([node, wanted]) => {
   const fold = window.__ja.fold;
@@ -222,6 +246,8 @@ class Form:
         box = self._control(section, field, TEXT_TYPES)
         if not box:
             raise LookupError("campo nao encontrado")
+        if self.page.evaluate("(node) => window.__ja.forbidden(node)", box):
+            raise LookupError("campo nao encontrado")  # Link do YouTube nunca e preenchido
         box.click()
         box.press("ControlOrMeta+a")
         box.press("Backspace")
@@ -266,10 +292,15 @@ class Form:
     def choose(self, section: str, field: str, value: str) -> None:
         """Finalidade e Tipo ficam travados ate carregar: espera e confere o que ficou."""
         limit = time.monotonic() + SELECT_WAIT_S
+        appears = time.monotonic() + SELECT_APPEARS_S
         while True:
             node = self._control(section, field, ["select:select-one"])
             if not node:
-                raise LookupError("lista nao encontrada")
+                # Suites so aparece depois dos dormitorios.
+                if time.monotonic() > appears:
+                    raise LookupError("lista nao encontrada")
+                self.page.wait_for_timeout(500)
+                continue
             state = self.page.evaluate(SELECT_STATE_JS, [node, value])
             if not state["travado"] and state["pronto"]:
                 result = self.page.evaluate(SET_SELECT_JS, [node, value])
@@ -296,6 +327,16 @@ class Form:
         self.page.wait_for_timeout(250)
         if not box.is_checked():
             raise ValueError("nao ficou marcada")
+
+    def furnish(self, section: str, field: str) -> None:
+        """Marca o ambiente mobiliado, nao a caixa de mesmo nome em Servicos."""
+        self.page.evaluate(SEARCH_JS)
+        box = self.page.evaluate_handle("(name) => window.__ja.roomBox(name)", field).as_element()
+        if not box:
+            raise LookupError("caixa nao encontrada")
+        if not box.is_checked():
+            box.check(force=True)
+        self.page.wait_for_timeout(200)
 
     def option(self, section: str, field: str, value: str) -> None:
         self.page.evaluate(SEARCH_JS)
@@ -341,9 +382,25 @@ class Form:
                   if (best) { best.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); best.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); best.click(); return best.innerText; }
                   return '';
                 }""", [value["rua"], value["bairro"]])
-        if not chosen:
+        if not chosen and not (value.get("cep") and self._street_by_cep(value["cep"])):
             raise LookupError("rua nao apareceu para este bairro")
         self.page.wait_for_timeout(1500)
+
+    def _street_by_cep(self, cep: str) -> bool:
+        """Rua que a busca nao conhece: usa o CEP dos imoveis ja cadastrados."""
+        self.page.keyboard.press("Escape")
+        switch = self.page.evaluate_handle("() => [...document.querySelectorAll('select')].find((node) => [...node.options].some((item) => /^cep$/i.test(item.text.trim())))").as_element()
+        if not switch:
+            return False
+        switch.select_option(label="CEP", force=True)
+        self.page.wait_for_timeout(700)
+        self.page.get_by_text(re.compile(r"digite|informe", re.IGNORECASE)).locator("visible=true").last.click(timeout=4000)
+        self.page.keyboard.type(cep, delay=30)
+        self.page.wait_for_timeout(2500)
+        self.page.keyboard.press("Enter")
+        self.page.wait_for_timeout(1000)
+        self.log.append(f"ENDERECO pelo CEP {cep}")
+        return True
 
     def condo(self, section: str, field: str, value: dict) -> None:
         """Escolhe o condominio pelo endereco; sem achar, segue pelo endereco normal."""
@@ -409,6 +466,8 @@ class Form:
             self.ask_floor(section, step["valor"])
         elif how == "marcar":
             self.tick(section, field)
+        elif how == "mobilia":
+            self.furnish(section, field)
         elif how == "clicar":
             self.click(section, field)
         else:
@@ -657,28 +716,68 @@ def ask_counts(item: dict, sheet: dict, notes: list[str]) -> dict:
     return filled
 
 
+def web_search(query: str) -> list[dict]:
+    from dodaios.core import knowledge
+
+    return asyncio.run(knowledge._search(query))
+
+
+def locate(item: dict, sheet: dict, notes: list[str]) -> dict:
+    """Corrige endereco e condominio pela base; apartamento nunca fica sem condominio."""
+    from dodaios.core import agent_questions as questions, kenlo_study as study, photo_vision as vision
+
+    filled = {**sheet, "condominio_nome": study.clean_condominium(sheet.get("condominio_nome", ""))}
+    place = study.find_place(filled["logradouro"], filled["numero"], filled["cidade"], filled["condominio_nome"])
+    if place.get("condominio") and study._plain(place["condominio"]) != study._plain(filled["condominio_nome"]):
+        notes.append(f"Condomínio pela base: {place['condominio']} (na ficha: {filled['condominio_nome'] or 'vazio'}). Confira.")
+    if place.get("rua") and place["rua"] != filled["logradouro"]:
+        notes.append(f"Endereço como está cadastrado na base: {place['rua']} (na ficha: {filled['logradouro'] or 'vazio'}). Confira.")
+    filled = {**filled, "condominio_nome": place.get("condominio") or filled["condominio_nome"], "logradouro": place.get("rua") or filled["logradouro"],
+              "numero": filled["numero"] or place.get("numero", ""), "bairro": place.get("bairro") or filled["bairro"], "cidade": place.get("cidade") or filled["cidade"],
+              "andares": filled.get("andares") or place.get("andares", ""), "cep": place.get("cep", "")}
+    if item.get("tipo") != "apartamento" or filled["condominio_nome"]:
+        return filled
+    found = study.web_place(filled["logradouro"], filled["numero"], filled["cidade"], vision._chat, web_search)
+    if found:
+        notes.append(f"Condomínio pela internet: {found}. Confira.")
+        return {**filled, "condominio_nome": found}
+    reply = questions.ask_owner(f"não achei o condomínio do {item['chave']} na ficha, na base nem na internet. Qual é o nome?", ["Seguir sem condomínio"])
+    return {**filled, "condominio_nome": "" if not reply or reply == "Seguir sem condomínio" else reply}
+
+
 def prepare(item: dict, rules: dict) -> tuple[dict, list[str]]:
     """Ficha, sequencia de fotos, anuncio e plano do imovel."""
     from dodaios.core import company_lessons as lessons, kenlo_study as study
     from dodaios.core import cadastro_plan as plan, photo_order as order, photo_vision as vision, property_intake as intake
     from dodaios.core.property_sheet import parse_sheet
 
-    sheet = plan.complete_sheet(item, parse_sheet(item["texto"]), rules)
+    notes: list[str] = []
+    sheet = plan.complete_sheet(item, locate(item, parse_sheet(item["texto"]), notes), rules)
     kind = order.sequence_kind(item["tipo"], item["condominio"])
     paths = [Path(path) for path in item.get("fotos", []) if Path(path).exists()]
-    notes: list[str] = []
     doubts: list[str] = []
     final = item.get("ordem_fotos") or []
     if not final:
         arranged = order.arrange(kind, vision.classify_all(paths, kind, rules["empresa"]), int(sheet["suites"] or 0))
         final = [photo["caminho"] for photo in arranged["ordem"]]
         doubts = arranged["duvidas"]
+        findings = order.photo_findings(arranged["ordem"])
         notes = arranged["avisos"] + doubts
         notes += [f"Falta foto no anuncio: {name}" for name in arranged["faltando"]]
         notes += [f"Repetida fora do anuncio: {Path(photo['caminho']).name}" for photo in arranged["repetidas"]]
         notes += [f"{Path(photo['caminho']).name}: {photo['ambiente']} ({photo['fonte']})" for photo in arranged["ordem"]]
-        intake.update(item["chave"], analise_fotos={"fotos": len(final), "duvidas": doubts, "avisos": arranged["avisos"], "repetidas": len(arranged["repetidas"]), "faltando": arranged["faltando"], "problemas": vision.problems[-3:]})
+        intake.update(item["chave"], analise_fotos={"achados": findings, "fotos": len(final), "duvidas": doubts, "avisos": arranged["avisos"], "repetidas": len(arranged["repetidas"]), "faltando": arranged["faltando"], "problemas": vision.problems[-3:]})
+    else:
+        findings = (item.get("analise_fotos") or {}).get("achados") or {}
     details = vision.detect_details([Path(path) for path in final])
+    rooms, seen = findings.get("mobilia", []), {"mobiliado": bool(sheet["mobiliado"])}
+    if len(rooms) >= FURNISHED_MIN and not sheet["mobiliado"]:
+        seen["mobiliado"] = True
+        notes.append("Mobiliado pelas fotos. Confira.")
+    if rooms or findings.get("itens"):
+        notes.append(f"Seletor de fotos: móveis em {', '.join(rooms) or 'nenhum ambiente'}; itens: {', '.join(findings.get('itens', [])) or 'nenhum'}.")
+    details = {**details, "piso": list(dict.fromkeys([*details["piso"], *findings.get("pisos", [])])), "itens": list(dict.fromkeys([*details["itens"], *findings.get("itens", [])]))}
+    sheet = {**sheet, **seen, "mobilia_ambientes": rooms}
     similar = study.suggest(item.get("tipo", ""), plan.KIND_LABELS.get(item.get("tipo", ""), ("", ""))[0] if item.get("finalidade") != "residencial" else "Residencial", sheet.get("bairro", ""), sheet.get("condominio_nome", ""), order.VISIBLE_ITEMS)
     if similar["fonte"]:
         notes.append(f"Consultei {similar['fonte']}: {', '.join(similar['campos']) or 'sem campo a sugerir'}. Confira.")
@@ -844,6 +943,10 @@ def fill(page, key: str, save: bool) -> bool:
         intake.mark(key, intake.PENDING, "")
         wait_closed(page)
         return True
+    page.evaluate(SEARCH_JS)
+    cleared = page.evaluate(CLEAR_FORBIDDEN_JS)
+    if cleared:
+        print(f"AVISO=Link do YouTube limpo antes de salvar: {cleared}", flush=True)
     button = page.evaluate_handle(SAVE_JS).as_element()
     if not button:
         raise LookupError("botao SALVAR nao apareceu: nada foi salvo")

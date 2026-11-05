@@ -171,6 +171,14 @@ def seen_items(sheet: dict[str, Any], check: list[str]) -> list[dict[str, Any]]:
     return [{**_step("Detalhes", name, "marcar", True), "opcional": True} for name in items]
 
 
+def furnished_rooms(sheet: dict[str, Any], check: list[str]) -> list[dict[str, Any]]:
+    """Imovel mobiliado: marca cada ambiente em que as fotos mostram moveis."""
+    rooms = sheet.get("mobilia_ambientes", []) if sheet.get("mobiliado") else []
+    if rooms:
+        check.append(f"Ambientes com mobília nas fotos: {', '.join(rooms)}. Confira.")
+    return [{**_step("Detalhes", name, "mobilia", True), "opcional": True} for name in rooms]
+
+
 def _parking(sheet: dict[str, Any], rules: dict[str, Any]) -> list[dict[str, Any]]:
     if not sheet["vagas"]:
         return []
@@ -217,7 +225,7 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
         # Achando o condominio, o Kenlo preenche o endereco sozinho.
         steps.append(_step("Estrutura", "Nome do condomínio/edifício:", "condominio", {"busca": sheet["condominio_nome"], "rua": sheet["logradouro"], "bairro": sheet["bairro"], "cidade": sheet["cidade"]}))
     address = [_step("Localização do imóvel", "Cidade:", "lista", sheet["cidade"]),
-               _step("Localização do imóvel", "Logradouro:", "logradouro", {"rua": sheet["logradouro"], "bairro": sheet["bairro"]}),
+               _step("Localização do imóvel", "Logradouro:", "logradouro", {"rua": sheet["logradouro"], "bairro": sheet["bairro"], "cep": sheet.get("cep", "")}),
                _step("Localização do imóvel", "Número", "texto", sheet["numero"])]
     steps += [{**step, "sem_condominio": True} for step in address]
     steps.append(_step("Localização do imóvel", "Complemento:", "texto", _complement(item, sheet, rules)))
@@ -278,7 +286,7 @@ def build_plan(item: dict[str, Any], sheet: dict[str, Any], rules: dict[str, Any
             steps += [_step(section, "*Dormitórios", "texto", sheet["dormitorios"]), _step(section, "Suites", "lista", sheet["suites"] or "0")]
         if sheet["banheiros"]:
             steps.append(_step(section, "Nº de banheiros", "texto", sheet["banheiros"]))
-    steps += seen_items(sheet, check) + floor_steps(item, sheet, rules, check)
+    steps += seen_items(sheet, check) + furnished_rooms(sheet, check) + floor_steps(item, sheet, rules, check)
     steps.append(_step("Fotos", "Fotos", "fotos"))
     section = "Publicação na web"
     steps += _fixed(rules, section, ("Anunciar:", "lista"), ("Comunicar proprietário:", "lista"), ("Imóvel em destaque:", "lista"), ("Imóvel em super destaque:", "lista"))

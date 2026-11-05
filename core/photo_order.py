@@ -160,6 +160,20 @@ def assign_rooms(kind: str, photos: list[dict[str, Any]], suites: int) -> list[s
     return notes
 
 
+FURNISHED_ROOMS: Final[tuple[tuple[str, str], ...]] = (("sala", "Sala"), ("cozinha", "Cozinha"), ("dormitorio", "Dormitórios"), ("suite", "Dormitórios"), ("banheiro", "Banheiro"),
+                                                      ("lavabo", "Banheiro"), ("closet", "Closet"), ("lavanderia", "Área de serviço"), ("area_servico", "Área de serviço"),
+                                                      ("corredor", "Corredor"), ("escritorio", "Escritório"))
+SURE_ROOM: Final[float] = 0.6
+
+
+def photo_findings(photos: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """O que o seletor viu nas fotos, para quem preenche o cadastro."""
+    sure = [photo for photo in photos if photo.get("confianca", 0) >= SURE_ROOM and not photo["ambiente"].startswith("condominio")]
+    rooms = [box for photo in sure if photo.get("mobiliado") for word, box in FURNISHED_ROOMS if photo["ambiente"].startswith(word)]
+    return {"mobilia": list(dict.fromkeys(rooms)), "itens": list(dict.fromkeys(name for photo in sure for name in photo.get("itens", []))),
+            "pisos": list(dict.fromkeys(photo["piso"] for photo in sure if photo.get("piso")))}
+
+
 def arrange(kind: str, photos: list[dict[str, Any]], suites: int = 0) -> dict[str, Any]:
     """Monta a sequencia final, as repetidas e as duvidas que importam."""
     sequence = SEQUENCES[kind]

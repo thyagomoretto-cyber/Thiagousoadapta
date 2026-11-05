@@ -1,0 +1,1244 @@
+{
+  "lidos": 1507,
+  "por_tipo": {
+    "Comercial-andar-corporativo-locacao": 1,
+    "Residencial-apartamento-venda": 192,
+    "Residencial-apartamento-locacao": 119,
+    "Residencial-area-venda": 1,
+    "Rural-area-venda": 1,
+    "Comercial-area-venda": 2,
+    "Comercial-area-locacao": 2,
+    "Residencial-casa-venda": 842,
+    "Residencial-casa-locacao": 194,
+    "Comercial-casa-venda": 9,
+    "Comercial-casa-locacao": 10,
+    "Residencial-chacara-venda": 2,
+    "Residencial-cobertura-venda": 3,
+    "Comercial-loja-locacao": 45,
+    "Comercial-loja-venda": 3,
+    "Industrial-pavilhao-venda": 1,
+    "Comercial-pavilhao-locacao": 36,
+    "Comercial-pavilhao-venda": 3,
+    "Industrial-pavilhao-locacao": 1,
+    "Comercial-predio-venda": 1,
+    "Comercial-sala-locacao": 40,
+    "Comercial-sala-venda": 9,
+    "Rural-sitio-venda": 2,
+    "Rural-sitio-locacao": 1,
+    "Residencial-terreno-venda": 147
+  },
+  "tipos": {
+    "Comercial-casa-venda": {
+      "imoveis": 7,
+      "campos": {
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Característica da vaga": "Não informado",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Isolamento": "Não informado",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Modo Isolamento": "Não informado",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de andares": "0",
+        "Padrão da localização": "Privilegiada",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "0,0000",
+        "Tipo": "Casa",
+        "Tipo de Locação": "Mensal",
+        "Tipo de pavimentação": "Não informado",
+        "Tipo de vaga": "Não informado",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0"
+      },
+      "marcados": [
+        "Ar condicionado",
+        "Cozinha",
+        "Esgoto",
+        "Foto de capa",
+        "Porcelanato",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação",
+        "Água",
+        "Área de serviço"
+      ]
+    },
+    "Comercial-casa-locacao": {
+      "imoveis": 5,
+      "campos": {
+        "Aceita financiamento": "Não",
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Característica da vaga": "Não informado",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Imóvel em super destaque": "Não",
+        "Isolamento": "Não informado",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Modo Isolamento": "Não informado",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Padrão": "Não informado",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Casa",
+        "Tipo de Locação": "Mensal",
+        "Tipo de pavimentação": "Não informado",
+        "Tipo de vaga": "Não informado",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0"
+      },
+      "marcados": [
+        "Cerâmica",
+        "Energia",
+        "Esgoto",
+        "Foto de capa",
+        "Locação",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda/Locação",
+        "Água"
+      ]
+    },
+    "Comercial-loja-locacao": {
+      "imoveis": 34,
+      "campos": {
+        "Aceita financiamento": "Não",
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de salas": "0",
+        "Número de divisórias": "0",
+        "Padrão da localização": "Privilegiada",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Situação do imóvel": "Desocupado",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Loja",
+        "Tipo de Locação": "Mensal",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas cobertas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Locação",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda/Locação"
+      ]
+    },
+    "Comercial-pavilhao-locacao": {
+      "imoveis": 18,
+      "campos": {
+        "Aceita financiamento": "Não",
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Kva Cabine Primária": "0",
+        "Kva Trifásico": "0",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de docas": "0",
+        "Nº de salas": "0",
+        "Número de divisórias": "0",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Situação do imóvel": "Desocupado",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Pavilhão",
+        "Tipo de Locação": "Mensal",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas cobertas": "0",
+        "Área do escritório": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Locação",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda/Locação"
+      ]
+    },
+    "Comercial-sala-venda": {
+      "imoveis": 6,
+      "campos": {
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Característica da vaga": "Não informado",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Isolamento": "Não informado",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Nº de banheiros": "1",
+        "Nº de salas": "0",
+        "Número de divisórias": "0",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Tipo": "Sala",
+        "Tipo de Locação": "Mensal",
+        "Tipo de vaga": "Não informado",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas descobertas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Sim",
+        "Somente venda",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação"
+      ]
+    },
+    "Comercial-sala-locacao": {
+      "imoveis": 21,
+      "campos": {
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Característica da vaga": "Não informado",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Comercial",
+        "Isolamento": "Não informado",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de banheiros": "1",
+        "Nº de salas": "0",
+        "Número de divisórias": "0",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Situação do imóvel": "Desocupado",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Sala",
+        "Tipo de Locação": "Mensal",
+        "Tipo de vaga": "Não informado",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas cobertas": "0",
+        "Vagas descobertas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Locação",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda/Locação"
+      ]
+    },
+    "Residencial-apartamento-venda": {
+      "imoveis": 112,
+      "campos": {
+        "Aceita financiamento": "Sim",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Imóvel em super destaque": "Não",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "0,0000",
+        "Tipo": "Apartamento",
+        "Tipo de Locação": "Mensal",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas descobertas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação"
+      ]
+    },
+    "Residencial-apartamento-locacao": {
+      "imoveis": 14,
+      "campos": {
+        "Aceita financiamento": "Sim",
+        "Aceita permuta?": "Não",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Imóvel em destaque": "Sim",
+        "Imóvel em super destaque": "Sim",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de salas": "0",
+        "Padrão": "Alto",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Situação do imóvel": "Desocupado",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Apartamento",
+        "Tipo de Locação": "Mensal",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas descobertas": "0"
+      },
+      "marcados": [
+        "Aquecimento de água à gás",
+        "Ar condicionado",
+        "Churrasqueira",
+        "Cozinha",
+        "Elevador",
+        "Foto de capa",
+        "Locação",
+        "Porcelanato",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda/Locação"
+      ]
+    },
+    "Residencial-casa-venda": {
+      "imoveis": 556,
+      "campos": {
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Motivo Venda?": "Não informado",
+        "Mídia de origem": "Não Informado / Outros",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "0,0000",
+        "Tipo": "Casa",
+        "Tipo de Locação": "Mensal",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Porcelanato",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação",
+        "Água"
+      ]
+    },
+    "Residencial-casa-locacao": {
+      "imoveis": 59,
+      "campos": {
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Imóvel em destaque": "Sim",
+        "Imóvel em super destaque": "Sim",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Mídia de origem": "Não Informado / Outros",
+        "Padrão": "Alto",
+        "Padrão da localização": "Privilegiada",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Situação do imóvel": "Desocupado",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "10,0000",
+        "Tipo": "Casa",
+        "Tipo de Locação": "Mensal",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0"
+      },
+      "marcados": [
+        "Aquecimento de água à gás",
+        "Ar condicionado",
+        "Churrasqueira",
+        "Cozinha",
+        "Energia",
+        "Esgoto",
+        "Foto de capa",
+        "Lareira",
+        "Lavabo",
+        "Locação",
+        "Pavimentação",
+        "Porcelanato",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação",
+        "Água"
+      ]
+    },
+    "Residencial-cobertura-venda": {
+      "imoveis": 3,
+      "campos": {
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Autorizado para comercialização": "Não",
+        "Buscar por": "Logradouro",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Metros da praia": "0",
+        "Mídia de origem": "Não Informado / Outros",
+        "Nº de salas": "0",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição": "Não informado",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Suítes": "1",
+        "Taxa de Administração (%)": "0,0000",
+        "Tipo": "Cobertura",
+        "Topografia": "Não informado",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não",
+        "Vagas": "0",
+        "Vagas cobertas": "2",
+        "Vagas descobertas": "0"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Somente venda",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação"
+      ]
+    },
+    "Residencial-terreno-venda": {
+      "imoveis": 121,
+      "campos": {
+        "Aceita financiamento": "Sim",
+        "Anunciar": "Sim",
+        "Aprovado Órgão Ambiental": "Não",
+        "Buscar por": "Logradouro",
+        "Cidade": "Gravataí",
+        "Classificação": "Alugar",
+        "Condição de pagamento IPTU / ITR": "Mensal",
+        "Estado": "Rio Grande do Sul",
+        "Exclusividade": "Não",
+        "Finalidade": "Residencial",
+        "Imóvel em destaque": "Não",
+        "Imóvel em super destaque": "Não",
+        "Locado": "Não",
+        "Material": "Adesivo",
+        "Medida": "M²",
+        "Metros da praia": "0",
+        "Mídia de origem": "Não Informado / Outros",
+        "País": "Brasil",
+        "Pelo": "Proprietário",
+        "Permuta": "Selecione",
+        "Placa no local": "Não",
+        "Posição solar/Face": "Não informado",
+        "Projeto aprovado": "Não",
+        "Promoção expira?": "Não",
+        "Status": "Ativo",
+        "Taxa de Administração (%)": "0,0000",
+        "Tipo": "Terreno",
+        "Tipo de Locação": "Mensal",
+        "UF": "RS",
+        "Usou FGTS nos últimos 3 anos?": "Não"
+      },
+      "marcados": [
+        "Foto de capa",
+        "Sim",
+        "Taxa de Administração (%)",
+        "Venda",
+        "Venda/Locação"
+      ]
+    }
+  },
+  "condominio_por_dormitorios": {
+    "---": {
+      "2": "284.00"
+    },
+    "Adonai": {
+      "2": "250.00"
+    },
+    "Alphaville Gravataí": {
+      "3": "800.00",
+      "4": "950.00",
+      "5": "950.00",
+      "?": "800.00"
+    },
+    "Anapio 2000": {
+      "?": "672.00"
+    },
+    "Aspen Mountain": {
+      "5": "3000.00"
+    },
+    "Av Cel João Batista": {
+      "3": "300.00"
+    },
+    "Bella Vitta": {
+      "3": "480.00",
+      "?": "560.00"
+    },
+    "Bosques do Sul": {
+      "4": "710.00"
+    },
+    "Camélias": {
+      "2": "350.00",
+      "3": "240.00"
+    },
+    "Capão Ilhas Resort": {
+      "5": "900.00"
+    },
+    "Castor": {
+      "3": "300.00"
+    },
+    "Central Square Centenário": {
+      "3": "350.00",
+      "?": "350.00"
+    },
+    "Centro": {
+      "3": "650.00"
+    },
+    "Centro Comercial Ary Inhoque": {
+      "?": "600.00"
+    },
+    "Centro Comercial Faro": {
+      "?": "300.00"
+    },
+    "Centro Comercial Lusitano": {
+      "?": "350.00"
+    },
+    "Centro Profissional Athos": {
+      "?": "320.00"
+    },
+    "City Park": {
+      "3": "800.00",
+      "4": "1000.00"
+    },
+    "Club Residencial Paseo Cittá / Torre 1": {
+      "2": "400.00"
+    },
+    "Condado Di Napoli": {
+      "2": "350.00"
+    },
+    "Conde de Gravathay": {
+      "3": "400.00"
+    },
+    "Condominio  Villagio Di Fiori": {
+      "2": "200.00"
+    },
+    "Condominio Jardim Planalto": {
+      "2": "312.00"
+    },
+    "Condominio Montevideo": {
+      "2": "350.00"
+    },
+    "Condomínio Aguas Claras": {
+      "3": "400.00"
+    },
+    "Condomínio Bávaro Princess": {
+      "3": "200.00"
+    },
+    "Condomínio Dom Feliciano": {
+      "2": "455.00",
+      "3": "6500.00",
+      "5": "600.00"
+    },
+    "Condomínio Edifício Residencial Nova Era Ix": {
+      "2": "260.00"
+    },
+    "Condomínio Enseada": {
+      "5": "1300.00"
+    },
+    "Condomínio Girassois": {
+      "2": "325.00"
+    },
+    "Condomínio Insdustrial Parque dos Anjos": {
+      "?": "1530.00"
+    },
+    "Condomínio Jardins do Vale": {
+      "2": "150.00",
+      "?": "300.00"
+    },
+    "Condomínio Jd América": {
+      "2": "550.00"
+    },
+    "Condomínio Mirá": {
+      "3": "450.00",
+      "?": "350.00"
+    },
+    "Condomínio Passo Das Pedras": {
+      "2": "350.00"
+    },
+    "Condomínio Piacenza": {
+      "3": "600.00"
+    },
+    "Condomínio Piazza Felicitá": {
+      "2": "520.00"
+    },
+    "Condomínio Residencial Aldeia Parque": {
+      "2": "430.00",
+      "3": "250.00"
+    },
+    "Condomínio Residencial Althaville": {
+      "2": "350.00"
+    },
+    "Condomínio Vale Das Cerejeiras": {
+      "2": "450.00",
+      "3": "200.00",
+      "4": "405.00"
+    },
+    "Condomínio Vale Ville": {
+      "2": "52.00"
+    },
+    "Condomínio Velas da Marina": {
+      "5": "3000.00",
+      "6": "3000.00"
+    },
+    "Condomínio Zait": {
+      "?": "500.00"
+    },
+    "Condomínio do Bem": {
+      "2": "250.00"
+    },
+    "Cyrela Landscape Seminário": {
+      "2": "500.00",
+      "3": "600.00",
+      "4": "500.00",
+      "5": "800.00",
+      "?": "550.00"
+    },
+    "David Canabarro": {
+      "3": "1529.00"
+    },
+    "Diamond Tower": {
+      "?": "210.00"
+    },
+    "Dom 588": {
+      "2": "500.00"
+    },
+    "Dom Celeste": {
+      "2": "350.00"
+    },
+    "Dom Feliciano Apartamento": {
+      "3": "680.00"
+    },
+    "Dom Luigi": {
+      "2": "500.00"
+    },
+    "Domani / Torre C": {
+      "2": "400.00"
+    },
+    "Don Juan": {
+      "2": "350.00",
+      "3": "600.00"
+    },
+    "Dorival Center": {
+      "2": "560.00"
+    },
+    "Ed Luiz Bastos": {
+      "2": "70.00"
+    },
+    "Ed. Carolina 351": {
+      "2": "100.00"
+    },
+    "Ed. Dona Wilma": {
+      "2": "680.00",
+      "3": "800.00"
+    },
+    "Ed. Nadymar": {
+      "2": "500.00"
+    },
+    "Ed. Rotterdam": {
+      "2": "650.00"
+    },
+    "Edifice Le Charmant": {
+      "2": "300.00"
+    },
+    "Edificio Carolina": {
+      "2": "290.00"
+    },
+    "Edificio Emanuel Center": {
+      "?": "700.00"
+    },
+    "Edificio Fioravante": {
+      "2": "360.00"
+    },
+    "Edifício  Torremolinos": {
+      "2": "394.00"
+    },
+    "Edifício Condado de Noronha": {
+      "1": "350.00",
+      "2": "410.00"
+    },
+    "Edifício Joana Darc": {
+      "2": "600.00"
+    },
+    "Edifício Toscana": {
+      "3": "380.00"
+    },
+    "El Shaday": {
+      "2": "100.00"
+    },
+    "Elizabetha": {
+      "?": "250.00"
+    },
+    "Essenza": {
+      "2": "350.00"
+    },
+    "Flor do Sol": {
+      "2": "395.00"
+    },
+    "Gabriela": {
+      "2": "120.00"
+    },
+    "Galeria Dom João Becker": {
+      "?": "242.00"
+    },
+    "Garden Club House": {
+      "2": "600.00",
+      "3": "380.00"
+    },
+    "Giordano Bruno": {
+      "3": "490.00"
+    },
+    "Golden Tower": {
+      "?": "450.00"
+    },
+    "Grand Orion": {
+      "2": "200.00"
+    },
+    "Grann Babylon": {
+      "2": "900.00",
+      "3": "600.00"
+    },
+    "Grann Hórus": {
+      "2": "380.00"
+    },
+    "Grann Oriente": {
+      "3": "500.00"
+    },
+    "Grann Palazzio": {
+      "2": "400.00",
+      "3": "500.00"
+    },
+    "Greenville": {
+      "2": "375.00"
+    },
+    "Hannover": {
+      "2": "600.00"
+    },
+    "Jardim Das Palmeiras": {
+      "3": "250.00"
+    },
+    "Jardim Di Napoli": {
+      "3": "350.00"
+    },
+    "Las Brisas": {
+      "4": "850.00"
+    },
+    "Lavoro": {
+      "?": "600.00"
+    },
+    "Le Charmant": {
+      "3": "450.00"
+    },
+    "Locatelli / 04 Ap 404": {
+      "2": "420.00"
+    },
+    "Loteamento Mato Alto": {
+      "?": "225000.00"
+    },
+    "Lírios do Campo": {
+      "2": "270.00"
+    },
+    "Maldonado": {
+      "2": "390.00"
+    },
+    "Marriot": {
+      "3": "450.00"
+    },
+    "Max Geiss": {
+      "?": "150.00"
+    },
+    "Monte Carlo": {
+      "3": "350.00"
+    },
+    "Monte Castello": {
+      "2": "300.00"
+    },
+    "Moradas Parque do Lago": {
+      "2": "200.00"
+    },
+    "Paragem Verdes Campos": {
+      "2": "850.00",
+      "3": "900.00",
+      "4": "1000.00",
+      "5": "1100.00",
+      "6": "825.00",
+      "?": "900.00"
+    },
+    "Parque Canoas Allegro": {
+      "2": "210.00"
+    },
+    "Paseo": {
+      "?": "350.00"
+    },
+    "Paseo Centrale / Bloco 11": {
+      "2": "320.00"
+    },
+    "Paseo Centrale / Bloco 14": {
+      "2": "290.00"
+    },
+    "Patio Dom": {
+      "?": "150.00"
+    },
+    "Petúnia": {
+      "2": "500.00"
+    },
+    "Poema": {
+      "2": "400.00"
+    },
+    "Porto Madrid": {
+      "2": "350.00"
+    },
+    "Porto Savana": {
+      "2": "230.00"
+    },
+    "Prado bairro cidade": {
+      "3": "1500.00",
+      "4": "1300.00",
+      "?": "1600.00"
+    },
+    "Primavera Condomínio Residencial": {
+      "2": "550.00",
+      "3": "500.00",
+      "4": "500.00",
+      "?": "480.00"
+    },
+    "Provincia Di Gênova": {
+      "3": "300.00",
+      "?": "410.00"
+    },
+    "Quinta dos Cedros": {
+      "2": "140.00"
+    },
+    "Reserva Bela Vista": {
+      "3": "50.00"
+    },
+    "Reserva Dom Feliciano": {
+      "3": "550000.00"
+    },
+    "Reserva da Aldeia": {
+      "3": "425.00"
+    },
+    "Reserva do Arvoredo / Bloco B": {
+      "2": "300.00"
+    },
+    "Reserva do Arvoredo / Bloco C": {
+      "2": "350.00"
+    },
+    "Reserva do Arvoredo / C 87": {
+      "2": "300.00"
+    },
+    "Residencial  Atlanta": {
+      "2": "450.00"
+    },
+    "Residencial Artemis": {
+      "2": "250.00"
+    },
+    "Residencial Atlanta": {
+      "2": "400.00",
+      "3": "450.00"
+    },
+    "Residencial Bernardo Joaquim": {
+      "2": "280.00"
+    },
+    "Residencial Celebrity": {
+      "2": "260.00",
+      "3": "260.00"
+    },
+    "Residencial Das Hortensias": {
+      "2": "150.00"
+    },
+    "Residencial Eduarda": {
+      "2": "150.00"
+    },
+    "Residencial Estoril": {
+      "3": "600.00"
+    },
+    "Residencial Florença": {
+      "2": "380.00"
+    },
+    "Residencial Grann Hathor": {
+      "2": "350.00"
+    },
+    "Residencial Harmonia": {
+      "3": "400.00"
+    },
+    "Residencial Itacolomi": {
+      "2": "338.00"
+    },
+    "Residencial Itaville": {
+      "3": "500.00"
+    },
+    "Residencial Jardim Das Flores": {
+      "4": "300.00"
+    },
+    "Residencial Jorge Amado": {
+      "2": "250.00"
+    },
+    "Residencial Luzitana": {
+      "2": "320.00"
+    },
+    "Residencial Maranata": {
+      "2": "360.00"
+    },
+    "Residencial Mirasol": {
+      "2": "350.00"
+    },
+    "Residencial Monte Belo": {
+      "2": "350.00"
+    },
+    "Residencial Moradas": {
+      "2": "300.00"
+    },
+    "Residencial Parque  do Sol": {
+      "3": "250.00"
+    },
+    "Residencial Parque do Sol II": {
+      "2": "250.00"
+    },
+    "Residencial Parque dos Anjos / Torre 02": {
+      "2": "350.00"
+    },
+    "Residencial Philadelphia": {
+      "2": "550.00"
+    },
+    "Residencial Porto Amalfi": {
+      "2": "450.00"
+    },
+    "Residencial Porto dos Anjos": {
+      "2": "222.00"
+    },
+    "Residencial Sintra": {
+      "3": "480.00"
+    },
+    "Residencial Solar Das Hortências": {
+      "2": "300.00"
+    },
+    "Residencial Solar Lindóia": {
+      "2": "68.00"
+    },
+    "Residencial Torrevieja": {
+      "3": "810.00"
+    },
+    "Residencial Vallais": {
+      "2": "450.00",
+      "3": "700.00"
+    },
+    "Residencial Viena": {
+      "2": "350.00",
+      "3": "300.00"
+    },
+    "Residencial Villagio Firenze": {
+      "3": "900.00",
+      "4": "1300.00",
+      "5": "1100.00",
+      "?": "1000.00"
+    },
+    "Residencial Vitta": {
+      "2": "350.00",
+      "3": "330.00"
+    },
+    "Residenziale Domani": {
+      "2": "500.00",
+      "3": "650.00"
+    },
+    "Residêncial Parque dos Anjos": {
+      "2": "350.00"
+    },
+    "Roberto Barbosa dos Reis": {
+      "2": "150.00"
+    },
+    "Saint Tropez": {
+      "2": "300.00"
+    },
+    "San Marino": {
+      "2": "1350.00"
+    },
+    "Santa Cecilia": {
+      "2": "350.00"
+    },
+    "Santa Maria Residence": {
+      "2": "350.00"
+    },
+    "Sem Nome": {
+      "2": "270.00"
+    },
+    "Solar Das Orquideas": {
+      "2": "350.00"
+    },
+    "Solar Mont Belo": {
+      "2": "350.00"
+    },
+    "Solar da Figueira": {
+      "2": "350.00"
+    },
+    "Solarium Residence": {
+      "2": "400.00",
+      "3": "1250.00"
+    },
+    "Sunset": {
+      "4": "800.00"
+    },
+    "Terranova": {
+      "3": "595000.00"
+    },
+    "Terras Alpha": {
+      "2": "500.00",
+      "3": "500.00",
+      "?": "700.00"
+    },
+    "Terrá": {
+      "3": "500.00"
+    },
+    "Tramonto": {
+      "2": "413.00"
+    },
+    "Unique Business": {
+      "?": "362.00"
+    },
+    "Upper Residence": {
+      "2": "600.00",
+      "3": "800.00"
+    },
+    "Valais": {
+      "2": "400.00",
+      "3": "650.00"
+    },
+    "Vale dos Lírios": {
+      "3": "450.00",
+      "4": "600.00"
+    },
+    "Vera Cruz": {
+      "2": "150.00"
+    },
+    "Veranópolis": {
+      "2": "200.00"
+    },
+    "Vilaggio Blu": {
+      "2": "450.00"
+    },
+    "Vilagio Di Venezia": {
+      "2": "350.00",
+      "3": "450.00"
+    },
+    "Villa Bella": {
+      "2": "700.00"
+    },
+    "Villa Di Ravenna": {
+      "2": "450.00"
+    },
+    "Villa Lucchesi": {
+      "2": "500.00",
+      "3": "400.00",
+      "4": "502.00",
+      "?": "300.00"
+    },
+    "Village Tropical": {
+      "3": "290.00"
+    },
+    "Villagio Blu": {
+      "2": "350.00"
+    },
+    "Villagio Di Venezia": {
+      "2": "400.00",
+      "3": "320.00"
+    },
+    "Villagio Piacenza": {
+      "3": "800.00"
+    },
+    "Villas Home Resort": {
+      "?": "1000.00"
+    },
+    "Viva Park / Torre 1": {
+      "2": "300.00"
+    },
+    "Vivenda Das Bromélias": {
+      "2": "250.00"
+    },
+    "Vivendas do Parque": {
+      "2": "180.00"
+    }
+  }
+}

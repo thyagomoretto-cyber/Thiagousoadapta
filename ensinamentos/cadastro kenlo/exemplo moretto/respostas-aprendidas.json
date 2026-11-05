@@ -1,8 +1,4 @@
 {
-  "moretto|Proprietário|*Nome do proprietário:|o campo não respondeu": {
-    "acao": "passos",
-    "valor": "[{\"texto\": \"Sim\"}]"
-  },
   "moretto|Localização do imóvel|Número|campo nao encontrado": {
     "acao": "passos",
     "valor": "[{\"texto\": \"Informe 1 caractere\"}, {\"texto\": \"Logradouro\\nCEP\"}]"

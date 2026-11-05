@@ -12,6 +12,7 @@ from typing import Any, Final
 
 COMPARED_HOW: Final[tuple[str, ...]] = ("texto", "lista", "dinheiro")
 MAX_TRIES: Final[int] = 3
+SEEN_TO_ASK: Final[int] = 2
 
 
 def _fold(text: Any) -> str:
@@ -32,6 +33,29 @@ def _same(left: Any, right: Any) -> bool:
 def snapshot(steps: list[dict[str, Any]]) -> dict[str, str]:
     """O que o agente preencheu, para comparar depois."""
     return {_fold(step["campo"]): str(step["valor"]) for step in steps if step["como"] in COMPARED_HOW and step["valor"] not in ("", None)}
+
+
+def boxes(steps: list[dict[str, Any]]) -> list[str]:
+    """Caixas que o agente marcou, para ver depois o que o dono mudou."""
+    return [step["campo"] for step in steps if step["como"] in ("marcar", "mobilia")]
+
+
+def box_changes(filled: list[str], final: list[str], known: tuple[str, ...]) -> list[tuple[str, str]]:
+    """Itens que o dono tirou ou colocou; so os que o agente decide sozinho."""
+    mine, kept, allowed = set(filled), set(final), set(known)
+    return sorted((name, "tirou") for name in (mine - kept) & allowed) + sorted((name, "colocou") for name in (kept - mine) & allowed)
+
+
+def tally(seen: dict[str, int], kind: str, changes: list[tuple[str, str]]) -> tuple[dict[str, int], list[tuple[str, str]]]:
+    """Conta as correcoes; a mesma correcao repetida vira pergunta ao dono."""
+    counts = dict(seen)
+    ready = []
+    for name, action in changes:
+        key = f"{kind}|{name}|{action}"
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] == SEEN_TO_ASK:
+            ready.append((name, action))
+    return counts, ready
 
 
 def differences(filled: dict[str, str], rules: dict[str, Any], final: dict[str, Any]) -> list[dict[str, str]]:

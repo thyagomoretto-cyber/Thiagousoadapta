@@ -168,6 +168,21 @@ def forget(company_id: str, number: int) -> dict[str, Any] | None:
     return removed
 
 
+def company_of(prefix: str) -> str:
+    """Id completo da empresa a partir do nome curto das regras do cadastro."""
+    from dodaios.core.paths import user_data_dir
+
+    found = sorted(path.name for path in (user_data_dir() / "data" / "company_knowledge").glob(f"{prefix}*"))
+    return found[0] if found else prefix
+
+
+def add_confirmed(company_id: str, lesson: dict[str, Any]) -> None:
+    """Licao que o dono acabou de aprovar na janela do agente."""
+    with _LOCK:
+        data = _read(company_id)
+        _write(company_id, {**data, "licoes": [*data.get("licoes", []), {**lesson, "quando_ensinou": datetime.now(UTC).isoformat(timespec="seconds")}]})
+
+
 def for_agent(company: str) -> list[dict[str, Any]]:
     """Licoes da empresa do agente; as de outra empresa nunca entram."""
     found: list[dict[str, Any]] = []

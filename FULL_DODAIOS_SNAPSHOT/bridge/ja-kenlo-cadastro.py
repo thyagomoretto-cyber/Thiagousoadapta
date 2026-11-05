@@ -91,7 +91,7 @@ SEARCH_JS = r"""
     },
     forbidden(node) {
       const near = (node.closest('div, td, li')?.innerText || '').slice(0, 60);
-      return /you\s*tube/i.test(`${node.name} ${node.id} ${node.placeholder || ''} ${near}`);
+      return node.id === 'txLinkVideo' || /you\s*tube/i.test(`${node.name} ${node.id} ${node.placeholder || ''} ${near}`);
     },
     checkbox(section, name) {
       const label = this.label(section, name);
@@ -113,6 +113,16 @@ CLEAR_FORBIDDEN_JS = r"""
   node.dispatchEvent(new Event('change', { bubbles: true }));
   return node.name || node.id;
 })
+"""
+CEP_MODE_JS = r"""
+() => {
+  const node = document.querySelector('#cepTipo');
+  const option = node && [...node.options].find((item) => item.text.trim().toUpperCase() === 'CEP');
+  if (!option) return false;
+  node.value = option.value;
+  if (window.jQuery) window.jQuery(node).trigger('change'); else node.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
 """
 SET_SELECT_JS = r"""
 ([node, wanted]) => {
@@ -370,6 +380,12 @@ class Form:
         opener.click()
         self.page.wait_for_timeout(400)
         self.page.keyboard.type(value["rua"], delay=20)
+        if not self._pick_street(value["rua"], value["bairro"]) and not (value.get("cep") and self._street_by_cep(value["cep"], value["bairro"])):
+            raise LookupError("rua nao apareceu para este bairro")
+        self.page.wait_for_timeout(1500)
+
+    def _pick_street(self, wanted: str, area: str) -> str:
+        """Espera a lista e escolhe o resultado do bairro certo."""
         chosen = ""
         limit = time.monotonic() + 12
         while time.monotonic() < limit and not chosen:
@@ -381,26 +397,23 @@ class Form:
                   const best = items.find((node) => fold(node.innerText).includes(fold(area))) || (items.length === 1 ? items[0] : null);
                   if (best) { best.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); best.dispatchEvent(new MouseEvent('mouseup', { bubbles: true })); best.click(); return best.innerText; }
                   return '';
-                }""", [value["rua"], value["bairro"]])
-        if not chosen and not (value.get("cep") and self._street_by_cep(value["cep"])):
-            raise LookupError("rua nao apareceu para este bairro")
-        self.page.wait_for_timeout(1500)
+                }""", [wanted, area])
+        return chosen
 
-    def _street_by_cep(self, cep: str) -> bool:
+    def _street_by_cep(self, cep: str, area: str) -> bool:
         """Rua que a busca nao conhece: usa o CEP dos imoveis ja cadastrados."""
         self.page.keyboard.press("Escape")
-        switch = self.page.evaluate_handle("() => [...document.querySelectorAll('select')].find((node) => [...node.options].some((item) => /^cep$/i.test(item.text.trim())))").as_element()
-        if not switch:
+        changed = self.page.evaluate(CEP_MODE_JS)
+        if not changed:
             return False
-        switch.select_option(label="CEP", force=True)
-        self.page.wait_for_timeout(700)
-        self.page.get_by_text(re.compile(r"digite|informe", re.IGNORECASE)).locator("visible=true").last.click(timeout=4000)
+        self.page.wait_for_timeout(800)
+        self.page.get_by_text(re.compile("digite um cep", re.IGNORECASE)).first.click(timeout=4000)
+        self.page.wait_for_timeout(400)
         self.page.keyboard.type(cep, delay=30)
-        self.page.wait_for_timeout(2500)
-        self.page.keyboard.press("Enter")
-        self.page.wait_for_timeout(1000)
-        self.log.append(f"ENDERECO pelo CEP {cep}")
-        return True
+        chosen = self._pick_street(cep, area)
+        if chosen:
+            self.log.append(f"ENDERECO pelo CEP {cep}")
+        return bool(chosen)
 
     def condo(self, section: str, field: str, value: dict) -> None:
         """Escolhe o condominio pelo endereco; sem achar, segue pelo endereco normal."""
@@ -858,14 +871,23 @@ def final_record(page, item: dict) -> dict | None:
         reading.search_button(page).click()
     hits = waited.value.json().get("hits", [])
     found = next((hit for hit in hits if str(hit.get("location_street_number", "")).strip() == sheet["numero"]), None)
-    return reading.read_one(page, found) if found else None
+    if not found:
+        return None
+    data = reading.read_one(page, found)
+    reference = reading.reference_of(found)
+    goal = "venda" if sheet.get("venda") else "locacao"
+    record = {"ref": reference, "tipo": item.get("tipo", ""), "finalidade": item.get("finalidade", "").capitalize(), goal: True, "campos": data["campos"], "marcados": data["marcados"],
+              "lista": {key: found.get(key) for key in reading.KEEP}, "lido_em": datetime.now().isoformat(timespec="seconds")}
+    return {**data, "ref": reference, "registro": record}
 
 
 def learn_from_finished(page) -> None:
     """Compara os cadastros finalizados e pergunta antes de mudar qualquer regra."""
-    from dodaios.core import agent_questions as questions, cadastro_plan as plan, kenlo_learning as learning, property_intake as intake
+    from dodaios.core import agent_questions as questions, cadastro_plan as plan, company_lessons as lessons, kenlo_learning as learning, kenlo_study as study, photo_order as order, property_intake as intake
 
     rules = plan.load_rules()
+    memory = plan.rules_path().parent / "aprendizado.json"
+    grew = False
     for item in learning.waiting(intake.all_items(), int(rules.get("codigo_inicial", 0)), intake.code_of):
         key = item["chave"]
         try:
@@ -884,7 +906,20 @@ def learn_from_finished(page) -> None:
             if learning.answer_is_yes(reply):
                 rules = learning.remember(plan.load_rules(), item.get("tipo", ""), change["campo"], change["kenlo"])
                 plan.rules_path().write_text(json.dumps(rules, ensure_ascii=False, indent=2), encoding="utf-8")
+        kind = item.get("tipo", "")
+        seen = json.loads(memory.read_text(encoding="utf-8")) if memory.is_file() else {}
+        seen, repeated = learning.tally(seen, kind, learning.box_changes(item.get("marcados", []), final.get("marcados", []), (*order.VISIBLE_ITEMS, *order.FLOORS)))
+        memory.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
+        for name, action in repeated:
+            word = "deixar de marcar" if action == "tirou" else "marcar"
+            if learning.answer_is_yes(questions.ask_owner(f"você {action} {name} nos últimos cadastros de {kind}. Devo sempre {word} em {kind}?", ["Sim", "Não"])):
+                lessons.add_confirmed(lessons.company_of(rules["empresa"]), {"quando": "", "fazer": f"{word.capitalize()} {name} em {kind}", "campo": name, "valor": "Não" if action == "tirou" else "Sim",
+                                                                             "tipos": [kind], "habilidade": "", "responsavel": "Especialista de cadastro", "rota": []})
+        study.save(final["ref"], final["registro"])
+        grew = True
         intake.update(key, comparado=True)
+    if grew:
+        print(f"APRENDIZADO_BASE={study.teach_specialist()} resumos", flush=True)
 
 
 def fill(page, key: str, save: bool) -> bool:
@@ -930,7 +965,7 @@ def fill(page, key: str, save: bool) -> bool:
     form = Form(page, rules.get("empresa", ""), item.get("tipo", ""))
     page.wait_for_timeout(2500)
     form.run(built["passos"], photos)
-    intake.update(key, preenchido=learning.snapshot(built["passos"]))
+    intake.update(key, preenchido=learning.snapshot(built["passos"]), marcados=learning.boxes(built["passos"]))
     page.evaluate(SEARCH_JS)
     field_map = page.evaluate(MAP_JS)
     if form.failed:

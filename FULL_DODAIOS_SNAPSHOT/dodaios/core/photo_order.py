@@ -162,7 +162,7 @@ def assign_rooms(kind: str, photos: list[dict[str, Any]], suites: int) -> list[s
 
 FURNISHED_ROOMS: Final[tuple[tuple[str, str], ...]] = (("sala", "Sala"), ("cozinha", "Cozinha"), ("dormitorio", "Dormitórios"), ("suite", "Dormitórios"), ("banheiro", "Banheiro"),
                                                       ("lavabo", "Banheiro"), ("closet", "Closet"), ("lavanderia", "Área de serviço"), ("area_servico", "Área de serviço"),
-                                                      ("corredor", "Corredor"), ("escritorio", "Escritório"))
+                                                      ("corredor", "Corredor"), ("escritorio", "Escritório"), ("home", "Home theater/cinema"))
 SURE_ROOM: Final[float] = 0.6
 
 
